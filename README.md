@@ -1,5 +1,7 @@
 # Calamitas Desktop Pet
 
+> **Note:** please ignore `Cryo Archon.mp3`. It is unrelated to this project.
+
 A stand-alone Supreme Calamitas boss fight on your desktop, built from the
 official Calamity Mod assets. She chases your cursor and throws her
 pre-brothers moveset at it.
