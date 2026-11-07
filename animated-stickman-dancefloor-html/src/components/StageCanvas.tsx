@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { AudioEngine } from '../audio/engine';
+import { Anchorer } from '../dance/anchor';
 import { Director } from '../dance/choreo';
 import { drawRig, mirrorRigW, projectRig, solveRig, solveRigWorld } from '../dance/rig';
 import { CameraDirector, Projector } from '../stage/camera';
@@ -26,19 +27,28 @@ interface Props {
   director: Director;
   camDirector: CameraDirector;
   camOn: boolean;
+  /** true = smooth anchored rig (arms + body), false = the classic live rig */
+  smooth: boolean;
   onInfo: (i: DanceInfo) => void;
 }
 
-export default function StageCanvas({ engine, director, camDirector, camOn, onInfo }: Props) {
+export default function StageCanvas({ engine, director, camDirector, camOn, smooth, onInfo }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const camOnRef = useRef(camOn);
   camOnRef.current = camOn;
+  const smoothRef = useRef(smooth);
+  smoothRef.current = smooth;
 
   useEffect(() => {
     const canvas = ref.current!;
     const ctx = canvas.getContext('2d')!;
     const st = makeStageState();
     const P = new Projector();
+    // one smoothing state per drawn figure (the dancer and his floor reflection)
+    const anchor = new Anchorer();
+    const anchorRefl = new Anchorer();
+    let wasSmooth = smoothRef.current;
+    let prevCut = 0;
     let wasCam = camOnRef.current;
     let toggleFlash = 0;
     let W = 0, H = 0, dpr = 1;
@@ -74,7 +84,19 @@ export default function StageCanvas({ engine, director, camDirector, camOn, onIn
       if (useCam !== wasCam) {
         wasCam = useCam;
         toggleFlash = 1;
+        anchor.reset();
+        anchorRefl.reset();
       }
+      const useSmooth = smoothRef.current;
+      if (useSmooth !== wasSmooth) {
+        wasSmooth = useSmooth;
+        anchor.reset();
+        anchorRefl.reset();
+      }
+      anchor.dt = dt;
+      anchorRefl.dt = dt;
+      const A = useSmooth ? anchor : undefined;
+      const AR = useSmooth ? anchorRefl : undefined;
       let camName = '';
       let cutFlash = 0;
 
@@ -82,7 +104,7 @@ export default function StageCanvas({ engine, director, camDirector, camOn, onIn
         drawBackdrop(ctx, L, m, st, time);
         drawFloor(ctx, L, m, time);
 
-        const rig = solveRig(out.pose, { cx: L.cx, fy: L.fy, U: L.U });
+        const rig = solveRig(out.pose, { cx: L.cx, fy: L.fy, U: L.U }, A);
 
         // soft contact shadow on the floor
         const lift = Math.min(1, rig.air * 2.2);
@@ -114,10 +136,16 @@ export default function StageCanvas({ engine, director, camDirector, camOn, onIn
           if (beatIdx % 4 === 0) st.flash = 1;
         }
 
-        const rw = solveRigWorld(out.pose);
+        const rw = solveRigWorld(out.pose, useSmooth);
         const co = camDirector.update(m, now, rw, out.intensity);
         camName = co.name;
         cutFlash = co.cut;
+        // a new camera shot is a hard cut: never smooth across it
+        if (co.cut - prevCut > 0.5) {
+          anchor.reset();
+          anchorRefl.reset();
+        }
+        prevCut = co.cut;
         P.set(co.shot, W, H);
 
         const lift = Math.min(1, rw.air * 2.2);
@@ -130,7 +158,7 @@ export default function StageCanvas({ engine, director, camDirector, camOn, onIn
         // glossy floor reflection (drawn before the walls so they hide anything below the floor line)
         ctx.save();
         ctx.globalAlpha = 0.16;
-        drawRig(ctx, projectRig(mirrorRigW(rw), proj), pelvisPpu);
+        drawRig(ctx, projectRig(mirrorRigW(rw), proj, AR), pelvisPpu);
         ctx.restore();
 
         drawWalls3D(ctx, P, W, H, m, time);
@@ -142,7 +170,7 @@ export default function StageCanvas({ engine, director, camDirector, camOn, onIn
           { z: speakerDepth(P, -1), draw: () => drawSpeaker3D(ctx, P, W, H, -1, m) },
           { z: speakerDepth(P, 1), draw: () => drawSpeaker3D(ctx, P, W, H, 1, m) },
           { z: ballDepth(P), draw: () => drawBall3D(ctx, P, time) },
-          { z: P.toCam(rw.pelvis)[2], draw: () => drawRig(ctx, projectRig(rw, proj), pelvisPpu, '#000000') },
+          { z: P.toCam(rw.pelvis)[2], draw: () => drawRig(ctx, projectRig(rw, proj, A), pelvisPpu, '#000000') },
         ];
         items.sort((a, b) => b.z - a.z);
         for (const it of items) it.draw();

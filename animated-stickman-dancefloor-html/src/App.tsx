@@ -20,6 +20,14 @@ export default function App() {
   const [director] = useState(() => new Director());
   const [camDirector] = useState(() => new CameraDirector());
   const [camOn, setCamOn] = useState(true);
+  // smooth anchored rig (default) vs the original live rig
+  const [smooth, setSmooth] = useState(() => {
+    try {
+      return localStorage.getItem('stickman.smoothRig') !== '0';
+    } catch {
+      return true;
+    }
+  });
   const [info, setInfo] = useState<DanceInfo>(INFO0);
   const [loading, setLoading] = useState<{ p: number; label: string } | null>(null);
   const [error, setError] = useState('');
@@ -70,6 +78,14 @@ export default function App() {
   }, [engine, run]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem('stickman.smoothRig', smooth ? '1' : '0');
+    } catch {
+      /* storage unavailable - fine */
+    }
+  }, [smooth]);
+
+  useEffect(() => {
     director.locked = locked;
   }, [locked, director]);
 
@@ -99,6 +115,10 @@ export default function App() {
         setCamOn((c) => !c);
         return;
       }
+      if (e.code === 'KeyS' && !e.metaKey && !e.ctrlKey && (e.target as HTMLElement).tagName !== 'INPUT') {
+        setSmooth((v) => !v);
+        return;
+      }
       if (e.code === 'Space' && engine.hasTrack && (e.target as HTMLElement).tagName !== 'INPUT') {
         e.preventDefault();
         engine.toggle();
@@ -121,7 +141,7 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-fuchsia-300 text-white select-none">
-      <StageCanvas engine={engine} director={director} camDirector={camDirector} camOn={camOn} onInfo={onInfo} />
+      <StageCanvas engine={engine} director={director} camDirector={camDirector} camOn={camOn} smooth={smooth} onInfo={onInfo} />
 
       {/* viewfinder */}
       {camOn && !hideUi && (
@@ -253,6 +273,24 @@ export default function App() {
                 <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${camOn ? 'left-3.5' : 'left-0.5'}`} />
               </span>
             </button>
+            <button
+              onClick={() => setSmooth((v) => !v)}
+              role="switch"
+              aria-checked={smooth}
+              title={
+                smooth
+                  ? 'Smooth rig: arms and body pinned to the head, jitter filtered (S). Click for the classic live rig.'
+                  : 'Classic rig: original live arm solver (S). Click for the smooth rig.'
+              }
+              className={`flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold transition ${
+                smooth ? 'bg-cyan-300 text-black' : 'bg-white/10 text-white hover:bg-white/20'
+              }`}
+            >
+              ✨ Smooth limbs
+              <span className={`relative h-4 w-7 rounded-full transition ${smooth ? 'bg-black/80' : 'bg-white/30'}`}>
+                <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${smooth ? 'left-3.5' : 'left-0.5'}`} />
+              </span>
+            </button>
             <div className="ml-auto hidden items-center gap-2 text-xs text-white/60 sm:flex">
               <span>🔈</span>
               <input
@@ -289,7 +327,7 @@ export default function App() {
                 onChange={(e) => engine.seek(parseFloat(e.target.value))}
                 className="mt-1 h-1.5 w-full accent-fuchsia-400 disabled:opacity-30"
               />
-              {trackName && <div className="mt-0.5 text-[10px] text-white/45">{status} · Space play/pause · C camera · H hide UI</div>}
+              {trackName && <div className="mt-0.5 text-[10px] text-white/45">{status} · Space play/pause · C camera · S smooth limbs · H hide UI</div>}
             </div>
           </div>
           {error && <div className="mt-2 rounded-lg bg-red-500/20 px-3 py-1.5 text-xs text-red-200">{error}</div>}

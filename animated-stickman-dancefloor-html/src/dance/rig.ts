@@ -1,5 +1,7 @@
 import { Pose } from './pose';
 import { V3, add, app, ik2, mul, rx, ry, rz } from './math3d';
+import type { Anchorer } from './anchor';
+import { clearRotation } from './clearance';
 
 /**
  * Proportions (body units, whole figure ~1.0 tall).
@@ -40,6 +42,8 @@ export interface Rig {
   shL: P2; shR: P2; elL: P2; elR: P2; wrL: P2; wrR: P2;
   head: P2; headPx: number;
   anchor: P2; air: number;
+  /** smooth rig only: where the torso meets the head ring + its curve's control point */
+  body?: { rim: P2; ctrl: P2 };
 }
 
 /** The skeleton in world space (y up, +z toward the default viewer). */
@@ -92,12 +96,24 @@ function clearBone(a: V3, v: V3, hc: V3, R: number, tmin: number, side: number):
   return v;
 }
 
+/** Continuous version of clearBone (exact tangent angle, soft preference for swinging outward). */
+function clearBoneExact(a: V3, v: V3, hc: V3, R: number, tmin: number, side: number): V3 {
+  if (R < 0.02) return v;
+  // rotating by +th increases side*x when side*(-vy) > 0 -> that direction is "outward"
+  const outPos = side * -v[1] >= 0;
+  const BIAS = 8 * D;
+  const th = clearRotation(a[0], a[1], v[0], v[1], hc[0], hc[1], R, tmin, outPos ? BIAS : 0, outPos ? 0 : BIAS);
+  if (!th) return v;
+  const c = Math.cos(th), s = Math.sin(th);
+  return [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+}
+
 const dirv = (side: number, a: number, f: number, l: number): V3 => {
   const A = a * D, F = f * D;
   return [side * Math.sin(A) * Math.cos(F) * l, -Math.cos(A) * Math.cos(F) * l, Math.sin(F) * l];
 };
 
-export function solveRigWorld(p: Pose): RigW {
+export function solveRigWorld(p: Pose, exact = false): RigW {
   const Rp = mul(ry(p.hipYaw * D), rz(p.hipRoll * D));
   const Rmid = mul(Rp, mul(rz(p.spineRoll * 0.5 * D), rx(p.spinePitch * 0.5 * D)));
   const Rc = mul(Rp, mul(rz(p.spineRoll * D), mul(rx(p.spinePitch * D), ry(p.twist * D))));
@@ -119,11 +135,12 @@ export function solveRigWorld(p: Pose): RigW {
   const hrot = mul(rz(p.headRoll * D), rx(p.headPitch * D));
   const hc = app(hrot, [p.headX, HEAD_R + p.headY, 0]); // head centre relative to the neck
   const clipK = Math.max(0, Math.min(1, p.armClip));
+  const clr = exact ? clearBoneExact : clearBone;
   const arm = (side: number, a1: number, f1: number, a2: number, f2: number) => {
     const sh: V3 = [side * SH_W, SH_DY, 0];
-    const u = clearBone(sh, dirv(side, a1, f1, UPPER), hc, (HEAD_R + 0.004) * clipK, 0.5, side);
+    const u = clr(sh, dirv(side, a1, f1, UPPER), hc, (HEAD_R + 0.004) * clipK, 0.5, side);
     const el: V3 = add(sh, u);
-    const f = clearBone(el, dirv(side, a2, f2, FORE), hc, (HEAD_R + 0.03) * clipK, 0, side);
+    const f = clr(el, dirv(side, a2, f2, FORE), hc, (HEAD_R + 0.03) * clipK, 0, side);
     return { el, wr: add(el, f) };
   };
   const aL = arm(-1, p.la1, p.lf1, p.la2, p.lf2);
@@ -267,8 +284,8 @@ function anchorArms(r: Rig, clip: number): Rig {
 }
 
 /** Classic fixed camera (slightly pitched, front-on). */
-export function solveRig(p: Pose, cam: Cam): Rig {
-  const w = solveRigWorld(p);
+export function solveRig(p: Pose, cam: Cam, anchorer?: Anchorer): Rig {
+  const w = solveRigWorld(p, !!anchorer);
   const proj = (v: V3): P2 => {
     const yc = v[1] * CO - v[2] * SI;
     const zc = v[1] * SI + v[2] * CO;
@@ -276,31 +293,33 @@ export function solveRig(p: Pose, cam: Cam): Rig {
     return { x: cam.cx + v[0] * s * cam.U, y: cam.fy - yc * s * cam.U, s };
   };
   const headP = proj(w.head);
-  return anchorArms({
+  const raw: Rig = {
     pelvis: proj(w.pelvis), ctrl: proj(w.ctrl), neck: proj(w.neck),
     hipL: proj(w.hipL), hipR: proj(w.hipR),
     kneeL: proj(w.kneeL), kneeR: proj(w.kneeR), footL: proj(w.footL), footR: proj(w.footR),
     shL: proj(w.shL), shR: proj(w.shR), elL: proj(w.elL), elR: proj(w.elR), wrL: proj(w.wrL), wrR: proj(w.wrR),
     head: headP, headPx: HEAD_R * headP.s * cam.U,
     anchor: proj(w.anchor), air: w.air,
-  }, w.armClip);
+  };
+  return anchorer ? anchorer.apply(raw, w.armClip) : anchorArms(raw, w.armClip);
 }
 
 /** Project a world-space rig with any projector that returns screen x/y and pixels-per-unit. */
-export function projectRig(w: RigW, f: (v: V3) => { x: number; y: number; ppu: number }): Rig {
+export function projectRig(w: RigW, f: (v: V3) => { x: number; y: number; ppu: number }, anchorer?: Anchorer): Rig {
   const pr = (v: V3): P2 => {
     const r = f(v);
     return { x: r.x, y: r.y, s: r.ppu };
   };
   const headP = pr(w.head);
-  return anchorArms({
+  const raw: Rig = {
     pelvis: pr(w.pelvis), ctrl: pr(w.ctrl), neck: pr(w.neck),
     hipL: pr(w.hipL), hipR: pr(w.hipR),
     kneeL: pr(w.kneeL), kneeR: pr(w.kneeR), footL: pr(w.footL), footR: pr(w.footR),
     shL: pr(w.shL), shR: pr(w.shR), elL: pr(w.elL), elR: pr(w.elR), wrL: pr(w.wrL), wrR: pr(w.wrR),
     head: headP, headPx: HEAD_R * headP.s,
     anchor: pr(w.anchor), air: w.air,
-  }, w.armClip);
+  };
+  return anchorer ? anchorer.apply(raw, w.armClip) : anchorArms(raw, w.armClip);
 }
 
 /**
@@ -332,16 +351,22 @@ export function drawRig(ctx: CanvasRenderingContext2D, r: Rig, U: number, color 
   limb(ctx, r.footR, r.kneeR, r.hipR, LEG_ROUND);
 
   // torso: one curved line from the hip point straight into the rim of the head (no neck)
-  let vx = r.neck.x - r.head.x, vy = r.neck.y - r.head.y;
-  const vl = Math.hypot(vx, vy);
-  if (vl < 1e-4) {
-    vx = 0; vy = 1;
+  if (r.body) {
+    // smooth rig: the rim point / control point were already pinned and filtered
+    ctx.moveTo(r.pelvis.x, r.pelvis.y);
+    ctx.quadraticCurveTo(r.body.ctrl.x, r.body.ctrl.y, r.body.rim.x, r.body.rim.y);
   } else {
-    vx /= vl; vy /= vl;
+    let vx = r.neck.x - r.head.x, vy = r.neck.y - r.head.y;
+    const vl = Math.hypot(vx, vy);
+    if (vl < 1e-4) {
+      vx = 0; vy = 1;
+    } else {
+      vx /= vl; vy /= vl;
+    }
+    const rimX = r.head.x + vx * r.headPx, rimY = r.head.y + vy * r.headPx;
+    ctx.moveTo(r.pelvis.x, r.pelvis.y);
+    ctx.quadraticCurveTo(r.ctrl.x, r.ctrl.y, rimX, rimY);
   }
-  const rimX = r.head.x + vx * r.headPx, rimY = r.head.y + vy * r.headPx;
-  ctx.moveTo(r.pelvis.x, r.pelvis.y);
-  ctx.quadraticCurveTo(r.ctrl.x, r.ctrl.y, rimX, rimY);
 
   // arms: from the lower flanks of the head, no hands, no shoulder bar
   limb(ctx, r.wrL, r.elL, r.shL, ARM_ROUND);
