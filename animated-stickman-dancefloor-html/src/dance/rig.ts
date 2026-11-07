@@ -49,6 +49,7 @@ export interface RigW {
   shL: V3; shR: V3; elL: V3; elR: V3; wrL: V3; wrR: V3;
   head: V3;
   anchor: V3; air: number;
+  armClip: number;
 }
 
 const JOINTS = [
@@ -161,7 +162,108 @@ export function solveRigWorld(p: Pose): RigW {
     shL: q(shL), shR: q(shR), elL: q(elL), elR: q(elR), wrL: q(wrL), wrR: q(wrR),
     head: q(head),
     anchor: [p.x, 0, 0], air: p.air,
+    armClip: p.armClip,
   };
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// Screen-space arm anchoring
+//
+// The arms are solved in 3D, but the head is drawn as a flat circle. Seen from the side, above or
+// below, the projected shoulders no longer line up with the ring and the arms look like they float.
+// The hand-drawn references solve this by always growing the arms straight out of the head's line,
+// even when that looks a little offset. We do the same, using the *camera's* view of the shoulder
+// (its projected direction from the head centre) to pick the spot on the ring, then slide the whole
+// arm with it so the pose keeps its shape.
+// ---------------------------------------------------------------------------------------------
+
+function segClear(ax: number, ay: number, vx: number, vy: number, hx: number, hy: number, R: number, tmin: number): boolean {
+  for (let k = tmin; k <= 1.0001; k += 0.1) {
+    if (Math.hypot(ax + vx * k - hx, ay + vy * k - hy) < R) return false;
+  }
+  return true;
+}
+
+/** Smallest rotation (radians) of the bone a -> a+v that keeps it outside the head disc. */
+function clearAngle(ax: number, ay: number, vx: number, vy: number, hx: number, hy: number, R: number, tmin: number): number {
+  if (segClear(ax, ay, vx, vy, hx, hy, R, tmin)) return 0;
+  for (let step = 1; step <= 45; step++) {
+    const th = step * 4 * D;
+    const c = Math.cos(th), s = Math.sin(th);
+    const ax1 = vx * c - vy * s, ay1 = vx * s + vy * c;
+    const ax2 = vx * c + vy * s, ay2 = -vx * s + vy * c;
+    const ok1 = segClear(ax, ay, ax1, ay1, hx, hy, R, tmin);
+    const ok2 = segClear(ax, ay, ax2, ay2, hx, hy, R, tmin);
+    if (ok1 && ok2) {
+      const d1 = Math.hypot(ax + ax1 - hx, ay + ay1 - hy), d2 = Math.hypot(ax + ax2 - hx, ay + ay2 - hy);
+      return d1 >= d2 ? th : -th;
+    }
+    if (ok1) return th;
+    if (ok2) return -th;
+  }
+  return 0;
+}
+
+function anchorArm(sh: P2, el: P2, wr: P2, head: P2, neck: P2, headPx: number, clip: number) {
+  // where does the camera see this shoulder relative to the head?
+  let dx = sh.x - head.x, dy = sh.y - head.y;
+  const len = Math.hypot(dx, dy);
+  // fallback / blend direction: the way the body leaves the head (screen-space "down the spine")
+  let bx = neck.x - head.x, by = neck.y - head.y;
+  const bl = Math.hypot(bx, by);
+  if (bl < 1e-4) { bx = 0; by = 1; } else { bx /= bl; by /= bl; }
+  const soft = headPx * 0.2;
+  if (len < 1e-4) {
+    dx = bx; dy = by;
+  } else if (len < soft) {
+    const t = len / soft;
+    dx = (dx / len) * t + bx * (1 - t);
+    dy = (dy / len) * t + by * (1 - t);
+    const l2 = Math.hypot(dx, dy) || 1;
+    dx /= l2; dy /= l2;
+  } else {
+    dx /= len; dy /= len;
+  }
+
+  // the arm root sits exactly on the head's ring; the rest of the arm travels with it
+  const rx0 = head.x + dx * headPx, ry0 = head.y + dy * headPx;
+  const mx = rx0 - sh.x, my = ry0 - sh.y;
+  const root: P2 = { x: rx0, y: ry0, s: sh.s };
+  let e: P2 = { x: el.x + mx, y: el.y + my, s: el.s };
+  let w: P2 = { x: wr.x + mx, y: wr.y + my, s: wr.s };
+
+  // keep the arm wrapping *around* the head instead of cutting through the hollow circle
+  const R = headPx * Math.min(1, Math.max(0, clip)) * 0.97;
+  if (R > headPx * 0.05) {
+    let fx = w.x - e.x, fy = w.y - e.y;
+    let ux = e.x - root.x, uy = e.y - root.y;
+    const t1 = clearAngle(root.x, root.y, ux, uy, head.x, head.y, R, 0.1);
+    if (t1) {
+      const c = Math.cos(t1), s = Math.sin(t1);
+      const ux2 = ux * c - uy * s, uy2 = ux * s + uy * c;
+      ux = ux2; uy = uy2;
+      // (rotate the forearm by the same angle so the pose keeps its shape)
+      const fx2 = fx * c - fy * s, fy2 = fx * s + fy * c;
+      fx = fx2; fy = fy2;
+    }
+    e = { x: root.x + ux, y: root.y + uy, s: e.s };
+    const t2 = clearAngle(e.x, e.y, fx, fy, head.x, head.y, R, 0);
+    if (t2) {
+      const c = Math.cos(t2), s = Math.sin(t2);
+      const fx2 = fx * c - fy * s, fy2 = fx * s + fy * c;
+      fx = fx2; fy = fy2;
+    }
+    w = { x: e.x + fx, y: e.y + fy, s: w.s };
+  }
+  return { root, el: e, wr: w };
+}
+
+/** Re-attach both arms to the head ring (screen space). */
+function anchorArms(r: Rig, clip: number): Rig {
+  const L = anchorArm(r.shL, r.elL, r.wrL, r.head, r.neck, r.headPx, clip);
+  const R = anchorArm(r.shR, r.elR, r.wrR, r.head, r.neck, r.headPx, clip);
+  return { ...r, shL: L.root, elL: L.el, wrL: L.wr, shR: R.root, elR: R.el, wrR: R.wr };
 }
 
 /** Classic fixed camera (slightly pitched, front-on). */
@@ -174,14 +276,14 @@ export function solveRig(p: Pose, cam: Cam): Rig {
     return { x: cam.cx + v[0] * s * cam.U, y: cam.fy - yc * s * cam.U, s };
   };
   const headP = proj(w.head);
-  return {
+  return anchorArms({
     pelvis: proj(w.pelvis), ctrl: proj(w.ctrl), neck: proj(w.neck),
     hipL: proj(w.hipL), hipR: proj(w.hipR),
     kneeL: proj(w.kneeL), kneeR: proj(w.kneeR), footL: proj(w.footL), footR: proj(w.footR),
     shL: proj(w.shL), shR: proj(w.shR), elL: proj(w.elL), elR: proj(w.elR), wrL: proj(w.wrL), wrR: proj(w.wrR),
     head: headP, headPx: HEAD_R * headP.s * cam.U,
     anchor: proj(w.anchor), air: w.air,
-  };
+  }, w.armClip);
 }
 
 /** Project a world-space rig with any projector that returns screen x/y and pixels-per-unit. */
@@ -191,14 +293,14 @@ export function projectRig(w: RigW, f: (v: V3) => { x: number; y: number; ppu: n
     return { x: r.x, y: r.y, s: r.ppu };
   };
   const headP = pr(w.head);
-  return {
+  return anchorArms({
     pelvis: pr(w.pelvis), ctrl: pr(w.ctrl), neck: pr(w.neck),
     hipL: pr(w.hipL), hipR: pr(w.hipR),
     kneeL: pr(w.kneeL), kneeR: pr(w.kneeR), footL: pr(w.footL), footR: pr(w.footR),
     shL: pr(w.shL), shR: pr(w.shR), elL: pr(w.elL), elR: pr(w.elR), wrL: pr(w.wrL), wrR: pr(w.wrR),
     head: headP, headPx: HEAD_R * headP.s,
     anchor: pr(w.anchor), air: w.air,
-  };
+  }, w.armClip);
 }
 
 /**

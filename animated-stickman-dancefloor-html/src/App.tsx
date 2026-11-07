@@ -28,6 +28,7 @@ export default function App() {
   const [showMoves, setShowMoves] = useState(false);
   const [drag, setDrag] = useState(false);
   const [vol, setVol] = useState(0.9);
+  const [hideUi, setHideUi] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const onInfo = useCallback((i: DanceInfo) => setInfo(i), []);
 
@@ -90,6 +91,10 @@ export default function App() {
       loadFile(e.dataTransfer?.files?.[0]);
     };
     const key = (e: KeyboardEvent) => {
+      if (e.code === 'KeyH' && !e.metaKey && !e.ctrlKey && (e.target as HTMLElement).tagName !== 'INPUT') {
+        setHideUi((h) => !h);
+        return;
+      }
       if (e.code === 'KeyC' && !e.metaKey && !e.ctrlKey && (e.target as HTMLElement).tagName !== 'INPUT') {
         setCamOn((c) => !c);
         return;
@@ -119,7 +124,7 @@ export default function App() {
       <StageCanvas engine={engine} director={director} camDirector={camDirector} camOn={camOn} onInfo={onInfo} />
 
       {/* viewfinder */}
-      {camOn && (
+      {camOn && !hideUi && (
         <div className="pointer-events-none absolute inset-2 sm:inset-4">
           <span className="absolute left-0 top-0 h-6 w-6 border-l-[3px] border-t-[3px] border-white/80" />
           <span className="absolute right-0 top-0 h-6 w-6 border-r-[3px] border-t-[3px] border-white/80" />
@@ -129,6 +134,7 @@ export default function App() {
       )}
 
       {/* header */}
+      {!hideUi && (
       <div className="pointer-events-none absolute left-0 right-0 top-0 flex items-start justify-between p-3 sm:p-5">
         <div className="rounded-2xl bg-black/70 px-4 py-2 backdrop-blur-md">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.3em] text-fuchsia-300">
@@ -164,9 +170,10 @@ export default function App() {
           </div>
         </div>
       </div>
+      )}
 
       {/* move picker */}
-      {showMoves && (
+      {showMoves && !hideUi && (
         <div className="absolute bottom-[128px] left-3 right-3 mx-auto max-w-3xl rounded-2xl bg-black/80 p-3 backdrop-blur-md sm:bottom-[116px]">
           <div className="flex flex-wrap justify-center gap-1.5">
             <button
@@ -193,6 +200,7 @@ export default function App() {
       )}
 
       {/* controls */}
+      {!hideUi && (
       <div className="absolute bottom-0 left-0 right-0 p-3 sm:p-5">
         <div className="mx-auto max-w-3xl rounded-3xl bg-black/75 p-3 shadow-2xl backdrop-blur-md sm:p-4">
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -281,12 +289,36 @@ export default function App() {
                 onChange={(e) => engine.seek(parseFloat(e.target.value))}
                 className="mt-1 h-1.5 w-full accent-fuchsia-400 disabled:opacity-30"
               />
-              {trackName && <div className="mt-0.5 text-[10px] text-white/45">{status} · Space play/pause · C camera</div>}
+              {trackName && <div className="mt-0.5 text-[10px] text-white/45">{status} · Space play/pause · C camera · H hide UI</div>}
             </div>
           </div>
           {error && <div className="mt-2 rounded-lg bg-red-500/20 px-3 py-1.5 text-xs text-red-200">{error}</div>}
         </div>
       </div>
+      )}
+
+      {/* hide / show the interface */}
+      <button
+        onClick={() => setHideUi((h) => !h)}
+        title={hideUi ? 'Show interface (H)' : 'Hide interface (H)'}
+        aria-label={hideUi ? 'Show interface' : 'Hide interface'}
+        className={`absolute right-3 z-10 flex items-center gap-1.5 rounded-full text-xs font-semibold transition sm:right-5 ${
+          hideUi
+            ? 'bottom-3 bg-black/30 px-3 py-1.5 text-white/60 opacity-40 hover:bg-black/70 hover:text-white hover:opacity-100 sm:bottom-5'
+            : 'top-[88px] bg-black/70 px-3 py-1.5 text-white/80 backdrop-blur-md hover:bg-black/90 hover:text-white sm:top-[112px]'
+        }`}
+      >
+        {hideUi ? (
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22" />
+          </svg>
+        )}
+        {hideUi ? 'Show UI' : 'Hide UI'}
+      </button>
 
       {/* analysis overlay */}
       {loading && (
