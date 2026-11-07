@@ -30,16 +30,17 @@ export interface Pose {
   lfx: number; lfy: number; lfz: number;
   rfx: number; rfy: number; rfz: number;
   lko: number; rko: number; // knee-out amount
+  armClip: number; // 1 = arms wrap around the head, 0 = arms may cross the face (dab!)
 }
 
 export const BASE: Pose = {
   x: 0, px: 0, pz: 0, air: 0, yaw: 0, roll: 0, hipH: 0.48,
   hipYaw: 0, hipRoll: 0, spineRoll: 0, spinePitch: 0, twist: 0,
   headRoll: 0, headPitch: 0, headX: 0, headY: 0,
-  la1: 14, lf1: 0, la2: 8, lf2: 14,
-  ra1: 14, rf1: 0, ra2: 8, rf2: 14,
+  la1: 50, lf1: 0, la2: 4, lf2: 8,
+  ra1: 50, rf1: 0, ra2: 4, rf2: 8,
   lfx: -0.1, lfy: 0, lfz: 0, rfx: 0.1, rfy: 0, rfz: 0,
-  lko: 0.4, rko: 0.4,
+  lko: 0.4, rko: 0.4, armClip: 1,
 };
 
 export const KEYS = Object.keys(BASE) as (keyof Pose)[];

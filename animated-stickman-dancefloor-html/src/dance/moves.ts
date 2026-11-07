@@ -35,6 +35,40 @@ const hold = (b: number, rate: number, list: Partial<Pose>[], snap = 5): Pose =>
   return lerpPose(a, c, t);
 };
 
+
+/** Mirror a (partial) pose left <-> right. */
+const NEG = new Set(['px', 'headX', 'spineRoll', 'hipRoll', 'headRoll', 'twist', 'hipYaw']);
+const mirrorPose = (p: Partial<Pose>): Partial<Pose> => {
+  const o: Record<string, number> = {};
+  for (const [k, v] of Object.entries(p) as [string, number][]) {
+    if (/^[lr][af][12xyz]$/.test(k) || /^[lr]ko$/.test(k)) {
+      const nk = (k[0] === 'l' ? 'r' : 'l') + k.slice(1);
+      o[nk] = /^[lr]fx$/.test(k) ? -v : v;
+    } else o[k] = NEG.has(k) ? -v : v;
+  }
+  return o as Partial<Pose>;
+};
+/** blend between a pose and its mirror image (t: 0 = as written, 1 = mirrored) */
+const side = (p: Partial<Pose>, t: number): Pose => lerpPose(mk(p), mk(mirrorPose(p)), t);
+
+// reference 5: the dab. one arm folded across the face, the other thrown out; the face hides in the elbow
+const DAB: Partial<Pose> = {
+  armClip: 0, la1: 138, lf1: 22, la2: -118, lf2: 38, ra1: 128, ra2: 128,
+  headRoll: -24, headPitch: 28, headX: -0.03, spineRoll: -6, spinePitch: 8, hipH: 0.45, lfx: -0.12, rfx: 0.12,
+};
+
+// reference 1: the big sideways lean, one leg flung out, arms curling up round the head like horns
+const LUNGE: Partial<Pose> = {
+  hipH: 0.3, px: 0.05, lfx: -0.36, rfx: 0.14, lko: 0.6, rko: 1.3, spineRoll: 26, hipRoll: 6, headRoll: 8,
+  la1: 158, la2: 172, ra1: 150, ra2: 165,
+};
+
+// reference 6: kneeling low, head heavy and forward, one hand resting on the hip
+const KNEEL: Partial<Pose> = {
+  hipH: 0.25, spinePitch: 18, headPitch: 10, lfx: -0.12, lfy: 0.02, lfz: -0.3, rfx: 0.16, rfz: 0.2,
+  lko: 0.3, rko: 0.5, la1: 20, la2: 5, ra1: 75, ra2: -50,
+};
+
 export interface MoveCtx { A: number; e: number }
 export interface Move {
   name: string;
@@ -380,13 +414,58 @@ export const MOVES: Move[] = [
       };
     },
   },
+  {
+    name: 'Dab', lo: 0.4, hi: 1, w: 1.0,
+    fn: (b, { A }) => {
+      const ph = fr(b / 2);
+      const on = sm(ph * 10) * (1 - sm((ph - 0.72) * 8));
+      const flip = Math.floor(b / 2) % 2 === 0 ? 0 : 1;
+      const rest: Partial<Pose> = {
+        hipH: 0.46 - 0.04 * A * dip(b), lfx: -0.12, rfx: 0.12, headRoll: 5 * sin(b, 2),
+        la1: 36, la2: 150, ra1: 36, ra2: 150,
+      };
+      return lerpPose(mk(rest), side(DAB, flip), on);
+    },
+  },
+  {
+    name: 'Lunge Lean', lo: 0.35, hi: 1, w: 1.0,
+    fn: (b, { A }) => {
+      const t = sm(0.5 + 0.5 * Math.tanh(3 * sin(b, 4)));
+      const p = side({ ...LUNGE, hipH: 0.3 - 0.025 * A * dip(b * 2), headRoll: 8 + 4 * sin(b, 1) }, t);
+      return p;
+    },
+  },
+  {
+    name: 'Kneel Rest', lo: 0, hi: 0.5, w: 0.8,
+    fn: (b) => {
+      const t = sm(0.5 + 0.5 * Math.tanh(3 * sin(b, 8)));
+      return side({ ...KNEEL, hipH: 0.25 + 0.006 * sin(b, 2), headRoll: 8 * sin(b, 4), spinePitch: 18 + 3 * sin(b, 2) }, t);
+    },
+  },
+  {
+    name: 'Sprint', lo: 0.6, hi: 1, w: 0.9,
+    fn: (b, { A }) => {
+      const th = TAU * (b / 1);
+      const sL = Math.sin(th), cL = Math.cos(th);
+      const sR = -sL, cR = -cL;
+      const bob = Math.abs(Math.sin(th));
+      return {
+        yaw: 74, air: 0.04 * A * bob, hipH: 0.45 - 0.02 * (1 - bob), spinePitch: 24, headPitch: -6,
+        lfy: 0.24 * Math.max(0, cL), lfz: 0.3 * sL, rfy: 0.24 * Math.max(0, cR), rfz: 0.3 * sR,
+        lfx: -0.04, rfx: 0.04, lko: 0, rko: 0,
+        la1: 50, lf1: -48 * sR, la2: 95, lf2: 55 - 20 * sR,
+        ra1: 50, rf1: -48 * sL, ra2: 95, rf2: 55 - 20 * sL,
+        x: 0.25 * sin(b, 8), hipYaw: 6 * sL, armClip: 0.6,
+      };
+    },
+  },
 ];
 
 export const IDLE: Move = {
   name: 'Waiting for the beat…', lo: 0, hi: 1, w: 1,
   fn: (b) => ({
     hipH: 0.476 + 0.004 * sin(b, 2), spineRoll: 1.5 * sin(b, 4), headRoll: 2 * sin(b, 8),
-    la1: 12 + 2 * sin(b, 2), ra1: 12 + 2 * sin(b, 2, 0.3), lf2: 14 + 3 * sin(b, 4), rf2: 14 + 3 * sin(b, 4, 0.4),
+    la1: 48 + 3 * sin(b, 2), ra1: 48 + 3 * sin(b, 2, 0.3), la2: 4 + 3 * sin(b, 4), ra2: 4 + 3 * sin(b, 4, 0.4),
   }),
 };
 

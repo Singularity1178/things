@@ -1,17 +1,30 @@
 import { Pose } from './pose';
 import { V3, add, app, ik2, mul, rx, ry, rz } from './math3d';
 
-// Proportions (body units, whole figure ~1.0 tall)
+/**
+ * Proportions (body units, whole figure ~1.0 tall).
+ *
+ * Modelled on the hand-drawn stickman references:
+ *  - a BIG hollow head sitting directly on the body (there is NO neck)
+ *  - one thick, uniform black stroke with round ends
+ *  - the torso starts right at the rim of the head
+ *  - the arms spring from the lower flanks of the head, short and softly curved
+ *  - both legs leave from a single hip point (no pelvis bar), no hands, no feet
+ */
 const THIGH = 0.26;
 const SHIN = 0.26;
-const TORSO = 0.31;
-const HIP_W = 0.06;
-const SH_W = 0.105;
-const UPPER = 0.175;
-const FORE = 0.175;
-const NECK = 0.03;
-export const HEAD_R = 0.085;
-export const LINE_W = 0.03;
+export const TORSO = 0.24; // hip point -> rim of the head
+const HIP_W = 0; // legs share one root, like the references
+export const SH_W = 0.06; // arm roots sit on the lower flanks of the head
+export const SH_DY = 0.008; // ...slightly above the base of the head
+export const UPPER = 0.155;
+export const FORE = 0.155;
+export const HEAD_R = 0.122; // radius measured to the CENTRE of the stroke
+export const LINE_W = 0.054; // thick marker stroke
+
+// how much the elbow / knee corners are rounded (fraction of the bone length)
+const ARM_ROUND = 0.36;
+const LEG_ROUND = 0.2;
 
 const CAM_PITCH = 0.2;
 const CO = Math.cos(CAM_PITCH);
@@ -53,6 +66,31 @@ export function mirrorRigW(r: RigW): RigW {
   return o;
 }
 
+
+/** Is the bone a -> a+v (from fraction tmin on) clear of the head disc (chest-frame x/y)? */
+function boneClear(a: V3, v: V3, hc: V3, R: number, tmin: number): boolean {
+  for (let k = tmin; k <= 1.0001; k += 0.1) {
+    if (Math.hypot(a[0] + v[0] * k - hc[0], a[1] + v[1] * k - hc[1]) < R) return false;
+  }
+  return true;
+}
+
+/** Rotate a bone (about z, as seen from the front) the smallest amount that clears the head. */
+function clearBone(a: V3, v: V3, hc: V3, R: number, tmin: number, side: number): V3 {
+  if (R < 0.02 || boneClear(a, v, hc, R, tmin)) return v;
+  for (let step = 1; step <= 30; step++) {
+    const th = step * 4 * D;
+    const c = Math.cos(th), s = Math.sin(th);
+    const v1: V3 = [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+    const v2: V3 = [v[0] * c + v[1] * s, -v[0] * s + v[1] * c, v[2]];
+    const ok1 = boneClear(a, v1, hc, R, tmin), ok2 = boneClear(a, v2, hc, R, tmin);
+    if (ok1 && ok2) return side * v1[0] >= side * v2[0] ? v1 : v2; // prefer swinging outward
+    if (ok1) return v1;
+    if (ok2) return v2;
+  }
+  return v;
+}
+
 const dirv = (side: number, a: number, f: number, l: number): V3 => {
   const A = a * D, F = f * D;
   return [side * Math.sin(A) * Math.cos(F) * l, -Math.cos(A) * Math.cos(F) * l, Math.sin(F) * l];
@@ -68,16 +106,34 @@ export function solveRigWorld(p: Pose): RigW {
   const hipL = add(P0, app(Rp, [-HIP_W, 0, 0]));
   const hipR = add(P0, app(Rp, [HIP_W, 0, 0]));
   const ctrl = add(P0, app(Rmid, [0, TORSO * 0.55, 0]));
+  // "neck" = where the spine meets the base of the head (there is no real neck)
   const neck = add(add(P0, app(Rmid, [0, TORSO * 0.5, 0])), app(Rc, [0, TORSO * 0.5, 0]));
-  const shL = add(neck, app(Rc, [-SH_W, -0.012, 0]));
-  const shR = add(neck, app(Rc, [SH_W, -0.012, 0]));
+  const shL = add(neck, app(Rc, [-SH_W, SH_DY, 0]));
+  const shR = add(neck, app(Rc, [SH_W, SH_DY, 0]));
 
-  const elL = add(shL, app(Rc, dirv(-1, p.la1, p.lf1, UPPER)));
-  const wrL = add(elL, app(Rc, dirv(-1, p.la2, p.lf2, FORE)));
-  const elR = add(shR, app(Rc, dirv(1, p.ra1, p.rf1, UPPER)));
-  const wrR = add(elR, app(Rc, dirv(1, p.ra2, p.rf2, FORE)));
+  // --- arms (solved in the chest frame, wrapped around the big head) ---
+  // The head is large and the arms spring from its flanks, so a raised arm would otherwise
+  // slice straight through the hollow head. Bend the bone away from the head instead, the way
+  // the "horn" arms hug the head in the references. `armClip` = 0 lets a pose cross the face on purpose.
+  const hrot = mul(rz(p.headRoll * D), rx(p.headPitch * D));
+  const hc = app(hrot, [p.headX, HEAD_R + p.headY, 0]); // head centre relative to the neck
+  const clipK = Math.max(0, Math.min(1, p.armClip));
+  const arm = (side: number, a1: number, f1: number, a2: number, f2: number) => {
+    const sh: V3 = [side * SH_W, SH_DY, 0];
+    const u = clearBone(sh, dirv(side, a1, f1, UPPER), hc, (HEAD_R + 0.004) * clipK, 0.5, side);
+    const el: V3 = add(sh, u);
+    const f = clearBone(el, dirv(side, a2, f2, FORE), hc, (HEAD_R + 0.03) * clipK, 0, side);
+    return { el, wr: add(el, f) };
+  };
+  const aL = arm(-1, p.la1, p.lf1, p.la2, p.lf2);
+  const aR = arm(1, p.ra1, p.rf1, p.ra2, p.rf2);
+  const elL = add(neck, app(Rc, aL.el));
+  const wrL = add(neck, app(Rc, aL.wr));
+  const elR = add(neck, app(Rc, aR.el));
+  const wrR = add(neck, app(Rc, aR.wr));
 
-  const head = add(neck, app(Rh, [p.headX, NECK + HEAD_R + p.headY, 0]));
+  // the head rests directly on the spine: its centre is one radius above the join
+  const head = add(neck, app(Rh, [p.headX, HEAD_R + p.headY, 0]));
 
   const legL = ik2(hipL, [p.lfx, p.lfy, p.lfz], THIGH, SHIN, app(Rp, [-p.lko, 0, 1]));
   const legR = ik2(hipR, [p.rfx, p.rfy, p.rfz], THIGH, SHIN, app(Rp, [p.rko, 0, 1]));
@@ -145,39 +201,54 @@ export function projectRig(w: RigW, f: (v: V3) => { x: number; y: number; ppu: n
   };
 }
 
+/**
+ * A two-bone limb a -> b -> c drawn as one marker stroke whose corner at `b` is softly rounded,
+ * like the bent-but-not-kinked arms and legs in the hand-drawn references.
+ */
+function limb(ctx: CanvasRenderingContext2D, a: P2, b: P2, c: P2, round: number) {
+  ctx.moveTo(a.x, a.y);
+  const ix = b.x + (a.x - b.x) * round, iy = b.y + (a.y - b.y) * round;
+  const ox = b.x + (c.x - b.x) * round, oy = b.y + (c.y - b.y) * round;
+  ctx.lineTo(ix, iy);
+  ctx.quadraticCurveTo(b.x, b.y, ox, oy);
+  ctx.lineTo(c.x, c.y);
+}
+
 export function drawRig(ctx: CanvasRenderingContext2D, r: Rig, U: number, color = '#000000') {
   ctx.save();
   ctx.strokeStyle = color;
-  ctx.lineWidth = LINE_W * U;
+  ctx.lineWidth = Math.max(1.5, LINE_W * U);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+
+  // Everything (incl. the head ring) is ONE path / ONE stroke, so overlaps merge into a clean
+  // silhouette and the translucent floor reflection never double-darkens.
   ctx.beginPath();
-  // legs + pelvis bar (one continuous line, ends are plain round tips: no feet)
-  ctx.moveTo(r.footL.x, r.footL.y);
-  ctx.lineTo(r.kneeL.x, r.kneeL.y);
-  ctx.lineTo(r.hipL.x, r.hipL.y);
-  ctx.lineTo(r.hipR.x, r.hipR.y);
-  ctx.lineTo(r.kneeR.x, r.kneeR.y);
-  ctx.lineTo(r.footR.x, r.footR.y);
-  // spine
+
+  // legs: both leave from the same hip point, no feet
+  limb(ctx, r.footL, r.kneeL, r.hipL, LEG_ROUND);
+  limb(ctx, r.footR, r.kneeR, r.hipR, LEG_ROUND);
+
+  // torso: one curved line from the hip point straight into the rim of the head (no neck)
+  let vx = r.neck.x - r.head.x, vy = r.neck.y - r.head.y;
+  const vl = Math.hypot(vx, vy);
+  if (vl < 1e-4) {
+    vx = 0; vy = 1;
+  } else {
+    vx /= vl; vy /= vl;
+  }
+  const rimX = r.head.x + vx * r.headPx, rimY = r.head.y + vy * r.headPx;
   ctx.moveTo(r.pelvis.x, r.pelvis.y);
-  ctx.quadraticCurveTo(r.ctrl.x, r.ctrl.y, r.neck.x, r.neck.y);
-  // shoulders + arms (no hands)
-  ctx.moveTo(r.wrL.x, r.wrL.y);
-  ctx.lineTo(r.elL.x, r.elL.y);
-  ctx.lineTo(r.shL.x, r.shL.y);
-  ctx.lineTo(r.shR.x, r.shR.y);
-  ctx.lineTo(r.elR.x, r.elR.y);
-  ctx.lineTo(r.wrR.x, r.wrR.y);
-  // neck stops at the rim of the hollow head
-  const vx = r.head.x - r.neck.x, vy = r.head.y - r.neck.y;
-  const vl = Math.hypot(vx, vy) || 1;
-  ctx.moveTo(r.neck.x, r.neck.y);
-  ctx.lineTo(r.head.x - (vx / vl) * r.headPx, r.head.y - (vy / vl) * r.headPx);
-  ctx.stroke();
-  // hollow head: outline only
-  ctx.beginPath();
+  ctx.quadraticCurveTo(r.ctrl.x, r.ctrl.y, rimX, rimY);
+
+  // arms: from the lower flanks of the head, no hands, no shoulder bar
+  limb(ctx, r.wrL, r.elL, r.shL, ARM_ROUND);
+  limb(ctx, r.wrR, r.elR, r.shR, ARM_ROUND);
+
+  // the big hollow head (outline only)
+  ctx.moveTo(r.head.x + r.headPx, r.head.y);
   ctx.arc(r.head.x, r.head.y, r.headPx, 0, Math.PI * 2);
+
   ctx.stroke();
   ctx.restore();
 }
