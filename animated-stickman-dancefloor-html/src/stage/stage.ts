@@ -26,10 +26,10 @@ export interface StageState {
 
 export const makeStageState = (): StageState => ({ confetti: [], flash: 0, lastBeat: -1 });
 
-const TAU = Math.PI * 2;
-const fr = (x: number) => x - Math.floor(x);
-const hsl = (h: number, s: number, l: number, a = 1) => `hsla(${((Math.round(h) % 360) + 360) % 360},${s}%,${l}%,${a})`;
-const hash = (a: number, b: number, c = 0) => {
+export const TAU = Math.PI * 2;
+export const fr = (x: number) => x - Math.floor(x);
+export const hsl = (h: number, s: number, l: number, a = 1) => `hsla(${((Math.round(h) % 360) + 360) % 360},${s}%,${l}%,${a})`;
+export const hash = (a: number, b: number, c = 0) => {
   let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
@@ -159,6 +159,12 @@ function drawDiscoBall(ctx: CanvasRenderingContext2D, L: Layout, m: MusicState, 
   ctx.lineTo(cx, cy - R);
   ctx.stroke();
 
+  drawMirrorBall(ctx, cx, cy, R, time);
+}
+
+/** The faceted, rotating mirror ball itself (screen-space circle). */
+export function drawMirrorBall(ctx: CanvasRenderingContext2D, cx: number, cy: number, R: number, time: number) {
+  const rot = time * 0.7;
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, R, 0, TAU);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AudioEngine } from './audio/engine';
 import { Director } from './dance/choreo';
 import { MOVES } from './dance/moves';
+import { CameraDirector } from './stage/camera';
 import StageCanvas, { DanceInfo } from './components/StageCanvas';
 
 const fmt = (s: number) => {
@@ -11,12 +12,14 @@ const fmt = (s: number) => {
 };
 
 const INFO0: DanceInfo = {
-  moveName: '', nextName: '', bpm: 118, intensity: 0.5, t: 0, duration: 0, playing: false, mode: 'freestyle', hasTrack: false,
+  moveName: '', nextName: '', bpm: 118, intensity: 0.5, t: 0, duration: 0, playing: false, mode: 'freestyle', hasTrack: false, camName: '',
 };
 
 export default function App() {
   const [engine] = useState(() => new AudioEngine());
   const [director] = useState(() => new Director());
+  const [camDirector] = useState(() => new CameraDirector());
+  const [camOn, setCamOn] = useState(true);
   const [info, setInfo] = useState<DanceInfo>(INFO0);
   const [loading, setLoading] = useState<{ p: number; label: string } | null>(null);
   const [error, setError] = useState('');
@@ -37,6 +40,7 @@ export default function App() {
       try {
         await job();
         director.setAnalysis(engine.analysis);
+        camDirector.setAnalysis(engine.analysis);
         setTrackName(engine.trackName);
       } catch (e) {
         console.error(e);
@@ -45,7 +49,7 @@ export default function App() {
         setLoading(null);
       }
     },
-    [director, engine],
+    [director, camDirector, engine],
   );
 
   const loadFile = useCallback(
@@ -86,6 +90,10 @@ export default function App() {
       loadFile(e.dataTransfer?.files?.[0]);
     };
     const key = (e: KeyboardEvent) => {
+      if (e.code === 'KeyC' && !e.metaKey && !e.ctrlKey && (e.target as HTMLElement).tagName !== 'INPUT') {
+        setCamOn((c) => !c);
+        return;
+      }
       if (e.code === 'Space' && engine.hasTrack && (e.target as HTMLElement).tagName !== 'INPUT') {
         e.preventDefault();
         engine.toggle();
@@ -108,12 +116,25 @@ export default function App() {
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-fuchsia-300 text-white select-none">
-      <StageCanvas engine={engine} director={director} onInfo={onInfo} />
+      <StageCanvas engine={engine} director={director} camDirector={camDirector} camOn={camOn} onInfo={onInfo} />
+
+      {/* viewfinder */}
+      {camOn && (
+        <div className="pointer-events-none absolute inset-2 sm:inset-4">
+          <span className="absolute left-0 top-0 h-6 w-6 border-l-[3px] border-t-[3px] border-white/80" />
+          <span className="absolute right-0 top-0 h-6 w-6 border-r-[3px] border-t-[3px] border-white/80" />
+          <span className="absolute bottom-0 left-0 h-6 w-6 border-b-[3px] border-l-[3px] border-white/80" />
+          <span className="absolute bottom-0 right-0 h-6 w-6 border-b-[3px] border-r-[3px] border-white/80" />
+        </div>
+      )}
 
       {/* header */}
       <div className="pointer-events-none absolute left-0 right-0 top-0 flex items-start justify-between p-3 sm:p-5">
         <div className="rounded-2xl bg-black/70 px-4 py-2 backdrop-blur-md">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.3em] text-fuchsia-300">Live on the dancefloor</div>
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.3em] text-fuchsia-300">
+            {camOn && <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />}
+            {camOn ? 'Rec · live on the dancefloor' : 'Live on the dancefloor'}
+          </div>
           <div className="text-lg font-black tracking-tight sm:text-2xl">STICKMAN DISCO</div>
         </div>
         <div className="max-w-[55%] rounded-2xl bg-black/70 px-4 py-2 text-right backdrop-blur-md">
@@ -125,6 +146,11 @@ export default function App() {
           </div>
           {info.mode !== 'idle' && locked === null && info.nextName && (
             <div className="truncate text-[11px] text-white/60">next: {info.nextName}</div>
+          )}
+          {camOn && info.camName && (
+            <div key={info.camName} className="animate-[pop_.25s_ease-out] truncate text-[11px] font-bold uppercase tracking-wider text-yellow-300">
+              🎥 {info.camName}
+            </div>
           )}
           <div className="mt-1 flex items-center justify-end gap-2 text-[11px] text-white/70">
             <span>{Math.round(info.bpm)} BPM</span>
@@ -205,6 +231,20 @@ export default function App() {
             >
               🕺 Moves
             </button>
+            <button
+              onClick={() => setCamOn((c) => !c)}
+              role="switch"
+              aria-checked={camOn}
+              title="Toggle camera angles (C)"
+              className={`flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold transition ${
+                camOn ? 'bg-yellow-300 text-black' : 'bg-white/10 text-white hover:bg-white/20'
+              }`}
+            >
+              🎥 Camera angles
+              <span className={`relative h-4 w-7 rounded-full transition ${camOn ? 'bg-black/80' : 'bg-white/30'}`}>
+                <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${camOn ? 'left-3.5' : 'left-0.5'}`} />
+              </span>
+            </button>
             <div className="ml-auto hidden items-center gap-2 text-xs text-white/60 sm:flex">
               <span>🔈</span>
               <input
@@ -241,7 +281,7 @@ export default function App() {
                 onChange={(e) => engine.seek(parseFloat(e.target.value))}
                 className="mt-1 h-1.5 w-full accent-fuchsia-400 disabled:opacity-30"
               />
-              {trackName && <div className="mt-0.5 text-[10px] text-white/45">{status} · Space to play/pause</div>}
+              {trackName && <div className="mt-0.5 text-[10px] text-white/45">{status} · Space play/pause · C camera</div>}
             </div>
           </div>
           {error && <div className="mt-2 rounded-lg bg-red-500/20 px-3 py-1.5 text-xs text-red-200">{error}</div>}

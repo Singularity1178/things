@@ -29,12 +29,36 @@ export interface Rig {
   anchor: P2; air: number;
 }
 
+/** The skeleton in world space (y up, +z toward the default viewer). */
+export interface RigW {
+  pelvis: V3; ctrl: V3; neck: V3;
+  hipL: V3; hipR: V3; kneeL: V3; kneeR: V3; footL: V3; footR: V3;
+  shL: V3; shR: V3; elL: V3; elR: V3; wrL: V3; wrR: V3;
+  head: V3;
+  anchor: V3; air: number;
+}
+
+const JOINTS = [
+  'pelvis', 'ctrl', 'neck', 'hipL', 'hipR', 'kneeL', 'kneeR', 'footL', 'footR',
+  'shL', 'shR', 'elL', 'elR', 'wrL', 'wrR', 'head', 'anchor',
+] as const;
+
+/** Mirror the skeleton in the floor plane (for the glossy reflection). */
+export function mirrorRigW(r: RigW): RigW {
+  const o = { ...r } as RigW;
+  for (const k of JOINTS) {
+    const v = r[k];
+    o[k] = [v[0], -v[1], v[2]];
+  }
+  return o;
+}
+
 const dirv = (side: number, a: number, f: number, l: number): V3 => {
   const A = a * D, F = f * D;
   return [side * Math.sin(A) * Math.cos(F) * l, -Math.cos(A) * Math.cos(F) * l, Math.sin(F) * l];
 };
 
-export function solveRig(p: Pose, cam: Cam): Rig {
+export function solveRigWorld(p: Pose): RigW {
   const Rp = mul(ry(p.hipYaw * D), rz(p.hipRoll * D));
   const Rmid = mul(Rp, mul(rz(p.spineRoll * 0.5 * D), rx(p.spinePitch * 0.5 * D)));
   const Rc = mul(Rp, mul(rz(p.spineRoll * D), mul(rx(p.spinePitch * D), ry(p.twist * D))));
@@ -73,22 +97,51 @@ export function solveRig(p: Pose, cam: Cam): Rig {
     return [C[0] + rc * dx + rs * dy, C[1] - rs * dx + rc * dy, b[2]];
   };
 
+  const q = T;
+  return {
+    pelvis: q(P0), ctrl: q(ctrl), neck: q(neck),
+    hipL: q(hipL), hipR: q(hipR),
+    kneeL: q(legL.mid), kneeR: q(legR.mid), footL: q(legL.end), footR: q(legR.end),
+    shL: q(shL), shR: q(shR), elL: q(elL), elR: q(elR), wrL: q(wrL), wrR: q(wrR),
+    head: q(head),
+    anchor: [p.x, 0, 0], air: p.air,
+  };
+}
+
+/** Classic fixed camera (slightly pitched, front-on). */
+export function solveRig(p: Pose, cam: Cam): Rig {
+  const w = solveRigWorld(p);
   const proj = (v: V3): P2 => {
     const yc = v[1] * CO - v[2] * SI;
     const zc = v[1] * SI + v[2] * CO;
     const s = 1 / (1 - zc * 0.16);
     return { x: cam.cx + v[0] * s * cam.U, y: cam.fy - yc * s * cam.U, s };
   };
-  const q = (v: V3) => proj(T(v));
-
-  const headP = q(head);
+  const headP = proj(w.head);
   return {
-    pelvis: q(P0), ctrl: q(ctrl), neck: q(neck),
-    hipL: q(hipL), hipR: q(hipR),
-    kneeL: q(legL.mid), kneeR: q(legR.mid), footL: q(legL.end), footR: q(legR.end),
-    shL: q(shL), shR: q(shR), elL: q(elL), elR: q(elR), wrL: q(wrL), wrR: q(wrR),
+    pelvis: proj(w.pelvis), ctrl: proj(w.ctrl), neck: proj(w.neck),
+    hipL: proj(w.hipL), hipR: proj(w.hipR),
+    kneeL: proj(w.kneeL), kneeR: proj(w.kneeR), footL: proj(w.footL), footR: proj(w.footR),
+    shL: proj(w.shL), shR: proj(w.shR), elL: proj(w.elL), elR: proj(w.elR), wrL: proj(w.wrL), wrR: proj(w.wrR),
     head: headP, headPx: HEAD_R * headP.s * cam.U,
-    anchor: proj([p.x, 0, 0]), air: p.air,
+    anchor: proj(w.anchor), air: w.air,
+  };
+}
+
+/** Project a world-space rig with any projector that returns screen x/y and pixels-per-unit. */
+export function projectRig(w: RigW, f: (v: V3) => { x: number; y: number; ppu: number }): Rig {
+  const pr = (v: V3): P2 => {
+    const r = f(v);
+    return { x: r.x, y: r.y, s: r.ppu };
+  };
+  const headP = pr(w.head);
+  return {
+    pelvis: pr(w.pelvis), ctrl: pr(w.ctrl), neck: pr(w.neck),
+    hipL: pr(w.hipL), hipR: pr(w.hipR),
+    kneeL: pr(w.kneeL), kneeR: pr(w.kneeR), footL: pr(w.footL), footR: pr(w.footR),
+    shL: pr(w.shL), shR: pr(w.shR), elL: pr(w.elL), elR: pr(w.elR), wrL: pr(w.wrL), wrR: pr(w.wrR),
+    head: headP, headPx: HEAD_R * headP.s,
+    anchor: pr(w.anchor), air: w.air,
   };
 }
 
