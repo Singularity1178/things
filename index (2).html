@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BA Students - tModLoader mod builder</title>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex items-start justify-center p-6">
+<main class="w-full max-w-2xl space-y-4">
+  <h1 class="text-2xl font-bold">BA Students <span class="text-slate-400 text-base font-normal">tModLoader mod</span></h1>
+  <p class="text-sm text-slate-300">
+    Replaces every town NPC with a Blue Archive student. Your browser downloads each <code>.glb</code> from
+    <a class="underline text-sky-400" href="https://github.com/lihaohong6/BlueArchiveModels" target="_blank">lihaohong6/BlueArchiveModels</a>,
+    bakes the <code>Cafe_Idle / Cafe_Walk / Formation_Idle / attack</code> clips into sprite sheets, and packs them with the C# code into a
+    <code>.zip</code> you unzip into <code>ModSources</code>. Models missing a clip fall back to another one (see the log).
+  </p>
+
+  <div class="grid grid-cols-2 gap-3 text-sm bg-slate-800 rounded-lg p-4">
+    <label class="flex flex-col gap-1">Sprite height (px in game)
+      <select id="hgt" class="bg-slate-700 rounded px-2 py-1">
+        <option value="64">64 (Terraria sized)</option>
+        <option value="80" selected>80</option>
+        <option value="96">96</option>
+        <option value="120">120</option>
+      </select>
+    </label>
+    <label class="flex flex-col gap-1">Bake FPS
+      <select id="fps" class="bg-slate-700 rounded px-2 py-1">
+        <option value="10">10</option>
+        <option value="12">12</option>
+        <option value="15" selected>15</option>
+        <option value="20">20</option>
+      </select>
+    </label>
+    <label class="flex flex-col gap-1">Walk heading (deg, 3/4 view)
+      <input id="yaw" type="number" value="65" min="30" max="90" class="bg-slate-700 rounded px-2 py-1">
+    </label>
+    <label class="flex items-end gap-2 pb-1"><input id="flip" type="checkbox"> Models face away / backwards (flip 180)</label>
+    <label class="col-span-2 flex flex-col gap-1">Optional: pick local .glb files (only if the download from GitHub fails; file names must match, e.g. <code>Noa.glb</code>)
+      <input id="file" type="file" accept=".glb" multiple class="text-xs">
+    </label>
+  </div>
+
+  <details class="text-sm bg-slate-800 rounded-lg p-4">
+    <summary class="cursor-pointer font-semibold">NPC &rarr; student list (untick to skip one)</summary>
+    <div id="roster" class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 mt-3"></div>
+  </details>
+
+  <button id="go" class="w-full bg-sky-600 hover:bg-sky-500 disabled:bg-slate-600 rounded-lg py-3 font-semibold text-lg">
+    Build &amp; download BAStudents.zip
+  </button>
+  <a id="again" class="hidden block text-center text-sky-400 underline text-sm" href="#">Download again</a>
+
+  <div id="previews" class="flex gap-3 flex-wrap"></div>
+  <pre id="log" class="bg-black/50 rounded-lg p-3 text-xs text-slate-300 h-48 overflow-auto whitespace-pre-wrap"></pre>
+
+  <details class="text-sm text-slate-300 bg-slate-800 rounded-lg p-4">
+    <summary class="cursor-pointer font-semibold">How to install</summary>
+    <ol class="list-decimal ml-5 mt-2 space-y-1">
+      <li>Unzip so you get <code>Documents/My Games/Terraria/tModLoader/ModSources/BAStudents/</code>.</li>
+      <li>Start tModLoader, then <b>Workshop &rarr; Develop Mods</b>, then <b>Build + Reload</b> next to <i>BAStudents</i>.</li>
+      <li>Enable it, and every town NPC (new or existing) is drawn as its student. If one walks backwards, tick the flip box above and rebuild. Disable the old <i>YuukaGuide</i> mod first.</li>
+    </ol>
+  </details>
+</main>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+
+const COMMIT = '06bb8e91b0b93ce9f8bf26c80ee94046fd1cb734';
+const REPO = 'https://raw.githubusercontent.com/lihaohong6/BlueArchiveModels/';
+const MOD = 'BAStudents';
+
+/* key = in-game given name + asset folder, npc = NPCID constant, file = .glb name in the repo (without .glb) */
+const STUDENTS = [
+  { key: 'Noa',      npc: 'Guide',          label: 'Guide',           file: 'Noa' },
+  { key: 'Juri',     npc: 'Merchant',       label: 'Merchant',        file: 'Juri (Part-Timer)' },
+  { key: 'Serina',   npc: 'Nurse',          label: 'Nurse',           file: 'Serina' },
+  { key: 'Mutsuki',  npc: 'Demolitionist',  label: 'Demolitionist',   file: 'Mutsuki' },
+  { key: 'Miku',     npc: 'DyeTrader',      label: 'Dye Trader',      file: 'Hatsune Miku' },
+  { key: 'Hare',     npc: 'Angler',         label: 'Angler',          file: 'Hare (Camping)' },
+  { key: 'Izuna',    npc: 'BestiaryGirl',   label: 'Zoologist',       file: 'Izuna' },
+  { key: 'Aoba',     npc: 'Dryad',          label: 'Dryad',           file: 'Aoba' },
+  { key: 'Midori',   npc: 'Painter',        label: 'Painter',         file: 'Midori' },
+  { key: 'Hina',     npc: 'Golfer',         label: 'Golfer',          file: 'Hina (Dress)' },
+  { key: 'Neru',     npc: 'ArmsDealer',     label: 'Arms Dealer',     file: 'Neru' },
+  { key: 'Haruna',   npc: 'DD2Bartender',   label: 'Tavernkeep',      file: 'Haruna' },
+  { key: 'Iroha',    npc: 'Stylist',        label: 'Stylist',         file: 'Iroha' },
+  { key: 'Chihiro',  npc: 'GoblinTinkerer', label: 'Goblin Tinkerer', file: 'Chihiro' },
+  { key: 'Ibuki',    npc: 'WitchDoctor',    label: 'Witch Doctor',    file: 'Ibuki' },
+  { key: 'Haruka',   npc: 'Clothier',       label: 'Clothier',        file: 'Haruka (Dress)' },
+  { key: 'Hibiki',   npc: 'Mechanic',       label: 'Mechanic',        file: 'Hibiki' },
+  { key: 'Asuna',    npc: 'PartyGirl',      label: 'Party Girl',      file: 'Asuna (Bunny Girl)' },
+  { key: 'Chise',    npc: 'Wizard',         label: 'Wizard',          file: 'Chise' },
+  { key: 'Yuuka',    npc: 'TaxCollector',   label: 'Tax Collector',   file: 'Yuuka' },
+  { key: 'Hoshino',  npc: 'Truffle',        label: 'Truffle',         file: 'Hoshino' },
+  { key: 'Aru',      npc: 'Pirate',         label: 'Pirate',          file: 'Aru' },
+  { key: 'Himari',   npc: 'Steampunker',    label: 'Steampunker',     file: 'Himari (Battle)' },
+  { key: 'Arisu',    npc: 'Cyborg',         label: 'Cyborg',          file: 'Arisu (Battle)' },
+  { key: 'Hanae',    npc: 'SantaClaus',     label: 'Santa Claus',     file: 'Hanae (Christmas)' },
+  { key: 'Mika',     npc: 'Princess',       label: 'Princess',        file: 'Mika' }
+];
+
+const $ = id => document.getElementById(id);
+const log = m => { const l = $('log'); l.textContent += m + '\n'; l.scrollTop = 1e9; };
+const norm = n => String(n).split(/[|:\/]/).pop().toLowerCase().replace(/[^a-z0-9]/g, '');
+const even = n => Math.round(n / 2) * 2;
+const tick = () => new Promise(r => setTimeout(r, 0));
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const toPNG = c => new Promise(r => c.toBlob(b => b.arrayBuffer().then(a => r(new Uint8Array(a))), 'image/png'));
+const enc = new TextEncoder();
+const txt = s => enc.encode(s);
+
+let lastZip = null;
+
+$('roster').innerHTML = STUDENTS.map((s, i) =>
+  '<label class="flex items-center gap-2"><input type="checkbox" checked data-i="' + i + '"> ' +
+  '<span class="text-slate-400 w-28 inline-block">' + s.label + '</span> ' + s.key + '</label>').join('');
+
+/* ------------------------------------------------------------------ zip (store) */
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = d => { let c = 0xFFFFFFFF; for (let i = 0; i < d.length; i++) c = CRC[(c ^ d[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+function makeZip(files) {
+  const parts = [], central = []; let off = 0;
+  const now = new Date();
+  const dt = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF;
+  const dd = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
+  for (const f of files) {
+    const name = txt(f.name), crc = crc32(f.data), sz = f.data.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
+    lh.setUint16(10, dt, true); lh.setUint16(12, dd, true); lh.setUint32(14, crc, true);
+    lh.setUint32(18, sz, true); lh.setUint32(22, sz, true); lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+    parts.push(new Uint8Array(lh.buffer), name, f.data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+    ch.setUint16(10, 0, true); ch.setUint16(12, dt, true); ch.setUint16(14, dd, true); ch.setUint32(16, crc, true);
+    ch.setUint32(20, sz, true); ch.setUint32(24, sz, true); ch.setUint16(28, name.length, true);
+    ch.setUint16(30, 0, true); ch.setUint16(32, 0, true); ch.setUint16(34, 0, true); ch.setUint16(36, 0, true);
+    ch.setUint32(38, 0, true); ch.setUint32(42, off, true);
+    central.push(new Uint8Array(ch.buffer), name);
+    off += 30 + name.length + sz;
+  }
+  let csz = 0; for (const c of central) csz += c.length;
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, csz, true); end.setUint32(16, off, true);
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
+}
+
+/* ------------------------------------------------------------------ model loading */
+function localFiles() {
+  const m = new Map();
+  for (const f of $('file').files) m.set(f.name.replace(/\.glb$/i, '').toLowerCase(), f);
+  return m;
+}
+async function getGlb(s, locals) {
+  const lf = locals.get(s.file.toLowerCase());
+  if (lf) { log('  using local file ' + lf.name); return await lf.arrayBuffer(); }
+  const name = encodeURIComponent(s.file) + '.glb';
+  for (const ref of [COMMIT, 'main']) {
+    try {
+      const r = await fetch(REPO + ref + '/' + name);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const b = await r.arrayBuffer();
+      log('  downloaded ' + s.file + '.glb (' + (b.byteLength / 1048576).toFixed(1) + ' MB)');
+      return b;
+    } catch (e) { log('  ' + ref.slice(0, 8) + ' failed: ' + e.message); }
+  }
+  throw new Error('Could not download ' + s.file + '.glb. Download it from the repo and pick it with the file box.');
+}
+function parseGlb(buf) {
+  const loader = new GLTFLoader();
+  loader.setMeshoptDecoder(MeshoptDecoder);
+  return new Promise((res, rej) => loader.parse(buf.slice(0), '', res, rej));
+}
+function disposeModel(root) {
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    if (o.geometry) o.geometry.dispose();
+    (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if (m) { if (m.map) m.map.dispose(); m.dispose(); } });
+  });
+}
+
+/* ------------------------------------------------------------------ C# sources */
+const csproj = () => `<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\\tModLoader.targets" />
+  <PropertyGroup>
+    <AssemblyName>${MOD}</AssemblyName>
+    <TargetFramework>net8.0</TargetFramework>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="tModLoader.CodeAssist" Version="0.1.*" />
+  </ItemGroup>
+</Project>
+`;
+const buildTxt = () => `displayName = BA Students
+author = BAStudents
+version = 1.0
+side = Both
+hideCode = false
+hideResources = false
+includeSource = true
+buildIgnore = *.csproj, *.user, *.md, obj\\*, bin\\*, .vs\\*
+`;
+const descTxt = () => `Replaces every town NPC with a Blue Archive student using sprites baked from the student .glb models.
+Idle / alert / walk / run / turn / react / fall / attack (start, ing, end) / reload animations follow the logic of the bapet desktop pet.
+`;
+const modCs = () => `using Terraria.ModLoader;
+
+namespace ${MOD}
+{
+    public class ${MOD} : Mod
+    {
+    }
+}
+`;
+const assetsCs = () => `using System.Collections.Generic;
+using Microsoft.Xna.Framework.Graphics;
+using ReLogic.Content;
+using Terraria;
+using Terraria.GameContent;
+using Terraria.ModLoader;
+
+namespace ${MOD}.Common
+{
+    /// <summary>Loads the baked sprite sheets (one PNG per student per clip) and swaps each NPC's chat/map head icon.</summary>
+    public class StudentAssets : ModSystem
+    {
+        public static Dictionary<string, Asset<Texture2D>> Sheets;
+
+        public override void Load()
+        {
+            if (Main.dedServ) return;
+            Sheets = new Dictionary<string, Asset<Texture2D>>();
+            foreach (KeyValuePair<string, Dictionary<string, ClipInfo>> s in StudentData.Clips)
+                foreach (string clip in s.Value.Keys)
+                    Sheets[s.Key + "/" + clip] = ModContent.Request<Texture2D>("${MOD}/Assets/Anim/" + s.Key + "/" + clip);
+        }
+
+        public override void Unload()
+        {
+            Sheets = null;
+        }
+
+        public override void PostSetupContent()
+        {
+            if (Main.dedServ) return;
+            foreach (KeyValuePair<int, string> kv in StudentData.Map)
+            {
+                try
+                {
+                    string path = "${MOD}/Assets/Heads/" + kv.Value;
+                    if (!ModContent.HasAsset(path)) continue;
+                    int idx = NPC.TypeToDefaultHeadIndex(kv.Key);
+                    if (idx <= 0 || idx >= TextureAssets.NpcHead.Length) continue;
+                    TextureAssets.NpcHead[idx] = ModContent.Request<Texture2D>(path, AssetRequestMode.ImmediateLoad);
+                }
+                catch (System.Exception e)
+                {
+                    Mod.Logger.Warn("Could not replace head icon for " + kv.Value + ": " + e.Message);
+                }
+            }
+        }
+
+        public static bool TryGet(string student, string clip, out Texture2D tex)
+        {
+            tex = null;
+            if (Sheets == null || !Sheets.TryGetValue(student + "/" + clip, out Asset<Texture2D> a) || a == null || !a.IsLoaded) return false;
+            tex = a.Value;
+            return true;
+        }
+    }
+}
+`;
+const npcCs = () => `using System;
+using System.Collections.Generic;
+using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
+using Terraria;
+using Terraria.ID;
+using Terraria.ModLoader;
+
+namespace ${MOD}.Common
+{
+    /// <summary>
+    /// Draws every mapped town NPC as its Blue Archive student (see StudentData.Map). C# port of the bapet Pet state machine:
+    ///   idle  (Cafe_Idle)        - standing; every 2.5-6 s she may switch to alert (Formation_Idle, 3-5.5 s)
+    ///   walk  (Cafe_Walk)        - NPC is moving (3/4 view), clip speed follows the real walking speed
+    ///   run   (Move_Ing)         - NPC is moving fast (fleeing); students without it just use the walk clip
+    ///   turn                     - idle pose swivelling front &lt;-&gt; 3/4
+    ///   react (Cafe_Reaction)    - plays when you start talking to her or she gets hurt
+    ///   pickup(Formation_Pickup) - while she is falling
+    ///   atk_start / atk_ing / atk_end - the shoot state machine: Start -&gt; Ing (repeats while firing) -&gt; End
+    ///   reload (Normal_Reload)   - after a magazine's worth of attacks
+    /// Clips a student's model does not have are simply absent from StudentData and fall back to idle / walk.
+    /// </summary>
+    public class StudentNPC : GlobalNPC
+    {
+        // tuning
+        private const float WalkRef = 1.1f;      // px/tick at which the walk clip plays at 1x
+        private const float RunRef = 2.4f;
+        private const float RunThreshold = 2.0f;
+        private const int MagSize = 8;           // attacks before she reloads
+
+        public override bool InstancePerEntity => true;
+
+        public override bool AppliesToEntity(NPC entity, bool lateInstantiation)
+        {
+            return StudentData.Map.ContainsKey(entity.type);
+        }
+
+        // state
+        private string student;
+        private Dictionary<string, ClipInfo> clips;
+        private string clip = "idle";
+        private float clipT;
+        private bool clipSide;
+        private string queue;
+        private bool turning;
+        private float turnPhase;
+        private float turnTarget;
+        private string pending = "idle";
+        private bool alertMode;
+        private float planT = 3f;
+        private bool wasAttacking;
+        private bool wasTalking;
+        private int shots;
+        private int lastDir = 1;
+
+        private bool Init(NPC npc)
+        {
+            if (clips != null) return true;
+            if (!StudentData.Map.TryGetValue(npc.type, out student)) return false;
+            return StudentData.Clips.TryGetValue(student, out clips) && clips.ContainsKey("idle");
+        }
+
+        private bool Has(string c)
+        {
+            return clips != null && clips.ContainsKey(c);
+        }
+
+        private static bool IsAttackClip(string c)
+        {
+            return c == "atk_start" || c == "atk_ing" || c == "atk_end";
+        }
+
+        private static bool IsAttacking(NPC npc)
+        {
+            float a = npc.ai[0];
+            return a == 10f || (a >= 12f && a <= 15f);
+        }
+
+        private static bool IsTalking(NPC npc)
+        {
+            if (npc.ai[0] == 7f || npc.ai[0] == 19f) return true;
+            return Main.myPlayer >= 0 && Main.myPlayer < Main.maxPlayers && Main.LocalPlayer.talkNPC == npc.whoAmI && npc.whoAmI >= 0;
+        }
+
+        private static float Rand(float a, float b)
+        {
+            return a + Main.rand.NextFloat() * (b - a);
+        }
+
+        public override void PostAI(NPC npc)
+        {
+            if (Main.dedServ) return;
+            if (!Init(npc)) return;
+            if (npc.GivenName != student) npc.GivenName = student;
+            Tick(npc);
+        }
+
+        private void Play(string name)
+        {
+            if (!Has(name)) name = "idle";
+            clip = name;
+            clipT = 0f;
+            clipSide = clips[name].Side;
+        }
+
+        private void Go(string name)
+        {
+            if (!Has(name)) return;
+            bool toSide = clips[name].Side;
+            if (turning)
+            {
+                pending = name;
+                turnTarget = toSide ? 1f : 0f;
+                return;
+            }
+            if (name == clip) return;
+            if (toSide != clipSide && Has("turn"))
+            {
+                turning = true;
+                turnPhase = clipSide ? 1f : 0f;
+                turnTarget = toSide ? 1f : 0f;
+                pending = name;
+                return;
+            }
+            Play(name);
+        }
+
+        private void Tick(NPC npc)
+        {
+            const float dt = 1f / 60f;
+            if (npc.spriteDirection != 0) lastDir = npc.spriteDirection;
+
+            bool attacking = IsAttacking(npc);
+            bool talking = IsTalking(npc);
+            bool air = npc.velocity.Y > 3f && !npc.collideY;
+            float ax = Math.Abs(npc.velocity.X);
+            bool moving = ax > 0.12f;
+
+            // ---- advance the current clip
+            ClipInfo ci = clips[clip];
+            float speed = 1f;
+            if (clip == "walk") speed = MathHelper.Clamp(ax / WalkRef, 0.6f, 1.8f);
+            else if (clip == "run") speed = MathHelper.Clamp(ax / RunRef, 0.7f, 1.8f);
+            clipT += dt * speed;
+            if (ci.Loop) { if (ci.Duration > 0f) clipT %= ci.Duration; }
+            else if (clipT > ci.Duration) clipT = ci.Duration;
+            bool done = !ci.Loop && clipT >= ci.Duration;
+
+            // ---- decide
+            if (attacking)
+            {
+                queue = null;
+                if (!wasAttacking || !IsAttackClip(clip))
+                    Go(Has("atk_start") ? "atk_start" : "atk_ing");
+                else if (done && Has("atk_ing"))
+                    Play("atk_ing"); // Ing follows Ing directly so she keeps firing
+            }
+            else if (wasAttacking && IsAttackClip(clip))
+            {
+                shots++;
+                bool reload = shots >= MagSize && Has("reload");
+                if (shots >= MagSize) shots = 0;
+                if (Has("atk_end")) { Go("atk_end"); queue = reload ? "reload" : null; }
+                else if (reload) Go("reload");
+            }
+            else
+            {
+                bool busy = (clip == "atk_end" || clip == "reload" || clip == "react") && !done && !moving && !air && !turning;
+                if (talking && !wasTalking && Has("react")) Go("react");
+                else if (npc.justHit && Has("react")) Go("react");
+                else if (air) { if (clip != "pickup") Go("pickup"); }
+                else if (busy) { }
+                else if (done && queue != null && !moving)
+                {
+                    string q = queue;
+                    queue = null;
+                    Go(q);
+                }
+                else ChooseBase(moving, ax, dt);
+            }
+
+            // ---- finish a turn
+            if (turning)
+            {
+                float step = dt / Math.Max(0.05f, TurnDuration());
+                turnPhase = turnPhase < turnTarget ? Math.Min(turnTarget, turnPhase + step) : Math.Max(turnTarget, turnPhase - step);
+                if (Math.Abs(turnPhase - turnTarget) < 0.001f)
+                {
+                    turning = false;
+                    if (pending != clip) Play(pending);
+                    else clipSide = clips[clip].Side;
+                }
+            }
+
+            wasAttacking = attacking;
+            wasTalking = talking;
+        }
+
+        private float TurnDuration()
+        {
+            return Has("turn") ? clips["turn"].Duration : 0.2f;
+        }
+
+        private void ChooseBase(bool moving, float ax, float dt)
+        {
+            string want;
+            if (moving)
+            {
+                want = (ax > RunThreshold && Has("run")) ? "run" : "walk";
+                if (!Has(want)) want = "idle";
+            }
+            else
+            {
+                // PetBehavior.plan_next_action: wait 2.5-6 s, then alert for 3-5.5 s about half of the time
+                planT -= dt;
+                if (planT <= 0f)
+                {
+                    if (alertMode) { alertMode = false; planT = Rand(2.5f, 6f); }
+                    else if (Has("alert") && Main.rand.NextFloat() < 0.5f) { alertMode = true; planT = Rand(3f, 5.5f); }
+                    else planT = Rand(2.5f, 6f);
+                }
+                want = (alertMode && Has("alert")) ? "alert" : "idle";
+            }
+            if (clip != want || turning) Go(want);
+        }
+
+        public override bool PreDraw(NPC npc, SpriteBatch spriteBatch, Vector2 screenPos, Color drawColor)
+        {
+            if (!Init(npc)) return true;
+            string name = (turning && Has("turn")) ? "turn" : clip;
+            if (!StudentAssets.TryGet(student, name, out Texture2D tex)) return true; // sheets not loaded yet: vanilla NPC
+
+            ClipInfo ci = clips[name];
+            int n = Math.Max(1, ci.Frames);
+            int idx;
+            if (name == "turn") idx = (int)Math.Round(turnPhase * (n - 1));
+            else if (ci.Duration <= 0f) idx = 0;
+            else
+            {
+                idx = (int)(clipT / ci.Duration * n);
+                idx = ci.Loop ? idx % n : Math.Min(n - 1, idx);
+            }
+            if (idx < 0) idx = 0;
+
+            int col = idx % ci.Cols;
+            int row = idx / ci.Cols;
+            Rectangle src = new Rectangle(col * StudentData.CellW, row * StudentData.CellH, StudentData.CellW, StudentData.CellH);
+            if (src.Right > tex.Width || src.Bottom > tex.Height) return true;
+
+            Vector2 origin = new Vector2(StudentData.CellW / 2f, StudentData.FeetRow);
+            Vector2 pos = npc.Bottom - screenPos + new Vector2(0f, npc.gfxOffY + 2f);
+            // sprites face right; vanilla NPC art faces left and is flipped for direction 1
+            SpriteEffects fx = npc.spriteDirection == -1 || (npc.spriteDirection == 0 && lastDir == -1)
+                ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
+            spriteBatch.Draw(tex, pos, src, npc.GetAlpha(drawColor), npc.rotation, origin, 1f, fx, 0f);
+            return false;
+        }
+    }
+}
+`;
+function studentDataCs(done, cellW, cellH, feetRow) {
+  let s = 'using System.Collections.Generic;\nusing Terraria.ID;\n\nnamespace ' + MOD + '.Common\n{\n';
+  s += '    public sealed class ClipInfo\n    {\n        public int Frames;\n        public int Cols;\n        public float Duration;\n        public bool Loop;\n        public bool Side;\n    }\n\n';
+  s += '    // GENERATED by the web builder from the student .glb files\n    public static class StudentData\n    {\n';
+  s += '        public const int CellW = ' + cellW + ';\n        public const int CellH = ' + cellH + ';\n        public const int FeetRow = ' + feetRow + ';\n\n';
+  s += '        /// <summary>NPC type -> student (given name and asset folder)</summary>\n';
+  s += '        public static readonly Dictionary<int, string> Map = new Dictionary<int, string>\n        {\n';
+  for (const d of done) s += '            [NPCID.' + d.s.npc + '] = "' + d.s.key + '",\n';
+  s += '        };\n\n';
+  s += '        public static readonly Dictionary<string, Dictionary<string, ClipInfo>> Clips = new Dictionary<string, Dictionary<string, ClipInfo>>\n        {\n';
+  for (const d of done) {
+    s += '            ["' + d.s.key + '"] = new Dictionary<string, ClipInfo>\n            {\n';
+    for (const m of d.meta) {
+      s += '                ["' + m.key + '"] = new ClipInfo { Frames = ' + m.n + ', Cols = ' + m.cols + ', Duration = ' + m.dur.toFixed(4) +
+        'f, Loop = ' + m.loop + ', Side = ' + m.side + ' },\n';
+    }
+    s += '            },\n';
+  }
+  s += '        };\n    }\n}\n';
+  return s;
+}
+const notesMd = done => `# Port notes: bapet (Python) -> tModLoader
+
+Models: github.com/lihaohong6/BlueArchiveModels @ ${COMMIT}
+
+| NPC | Student | Source .glb | Fallbacks used |
+|-----|---------|-------------|----------------|
+${done.map(d => '| ' + d.s.label + ' | ' + d.s.key + ' | ' + d.s.file + '.glb | ' + (d.fb.length ? d.fb.join('; ') : '-') + ' |').join('\n')}
+
+| Python (bapet)                                   | This mod |
+|--------------------------------------------------|----------|
+| ANIM_KEYS idle/walk/alert/react/pickup/reload    | clips idle / walk / alert / react / pickup / reload |
+| combat_data.attack_sets (Normal_Attack_Start/Ing/End) | atk_start / atk_ing / atk_end |
+| combat_data.move_sets (Move_Ing)                 | run (falls back to walk) |
+| PetBehavior.plan_next_action                     | StudentNPC.ChooseBase |
+| PetAttack.atk_phase start -> ing -> end          | atk_start -> atk_ing (repeats while ai[0] is an attack state) -> atk_end |
+| Pet.fall / pickup                                | pickup clip while npc.velocity.Y > 3 |
+| tap reaction (Cafe_Reaction)                     | react clip when you start talking or the NPC is hit |
+
+Vanilla town NPC AI is untouched (movement, housing, shop, help text). Only drawing is replaced via GlobalNPC.PreDraw,
+the chat head / map icon (TextureAssets.NpcHead) and the given name.
+
+Animation states are read from the vanilla town NPC AI: ai[0] 1 = walking, 7/19 = talking, 10 and 12-15 = attacking.
+`;
+
+/* ------------------------------------------------------------------ bake one student */
+async function bakeStudent(s, ctx, files, locals) {
+  const { renderer, H, FPS, FLIP, SIDE, SS, MAXF, COLS, cellW, cellH, feetRow } = ctx;
+  const root = MOD + '/';
+  const fb = [];
+  const buf = await getGlb(s, locals);
+  await tick();
+  const gltf = await parseGlb(buf);
+  const anims = gltf.animations || [];
+  if (!anims.length) throw new Error(s.file + '.glb contains no animations.');
+
+  const scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+  const dl = new THREE.DirectionalLight(0xffffff, 0.45); dl.position.set(0.4, 0.9, 1.2); scene.add(dl);
+  const group = new THREE.Group(), model = gltf.scene;
+  group.add(model); scene.add(group);
+
+  const weapons = [];
+  model.traverse(o => {
+    if (!o.isMesh) return;
+    o.frustumCulled = false;
+    if (/(^|[_ .:-])(fx|vfx)([_ .:-]|$)|effect|tank|wheelchair/i.test(o.name)) { o.visible = false; return; }
+    if (/weapon/i.test(o.name)) weapons.push(o);
+    const conv = m => {
+      const cut = m.transparent || m.alphaTest > 0;
+      return new THREE.MeshLambertMaterial({
+        map: m.map || null, color: m.color ? m.color.clone() : 0xffffff,
+        side: m.side, alphaTest: cut ? (m.alphaTest || 0.4) : 0, transparent: false
+      });
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(conv) : conv(o.material);
+  });
+  const showWeapons = v => weapons.forEach(w => { w.visible = v; });
+
+  const rest = []; model.traverse(o => rest.push([o, o.position.clone(), o.quaternion.clone(), o.scale.clone()]));
+  const restore = () => rest.forEach(([o, p, q, sc]) => { o.position.copy(p); o.quaternion.copy(q); o.scale.copy(sc); });
+
+  let pelvis = null, head = null;
+  model.traverse(o => {
+    if (!o.isBone) return;
+    const n = o.name.toLowerCase();
+    if (!pelvis && /pelvis|hips/.test(n)) pelvis = o;
+    if (!head && /head$/.test(n) && !/(top|end|nub|twist)/.test(n)) head = o;
+  });
+
+  let mixer = null;
+  const useClip = (anim, loop) => {
+    if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(model); }
+    restore();
+    mixer = new THREE.AnimationMixer(model);
+    const a = mixer.clipAction(anim);
+    if (!loop) { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; }
+    a.play();
+  };
+  const v3 = new THREE.Vector3();
+  const pose = (t, yaw) => {
+    mixer.setTime(t);
+    group.position.set(0, 0, 0);
+    group.rotation.y = yaw + (FLIP ? Math.PI : 0);
+    group.updateMatrixWorld(true);
+    if (pelvis) { pelvis.getWorldPosition(v3); group.position.x -= v3.x; group.position.z -= v3.z; }
+    group.updateMatrixWorld(true);
+    model.traverse(o => { if (o.isSkinnedMesh) o.skeleton.update(); });
+  };
+
+  /* clip selection (same name folding as combat_data.attack_sets / Model.find_clip) */
+  const byNorm = new Map();
+  anims.forEach(a => { const k = norm(a.name); if (!byNorm.has(k)) byNorm.set(k, a); });
+  const pick = (...c) => { for (const k of c) if (byNorm.has(k)) return byNorm.get(k); return null; };
+  const fuzzy = x => anims.find(a => norm(a.name).includes(x)) || null;
+  const atk = {};
+  for (const [k, a] of byNorm) {
+    const m = /^(normal|stand|kneel)attack(start|strat|ing|delay|end)$/.exec(k);
+    if (m) { const ph = m[2] === 'strat' ? 'start' : m[2]; (atk[m[1]] ||= {})[ph] = a; }
+  }
+  const stance = ['normal', 'stand', 'kneel'].find(x => atk[x] && atk[x].ing);
+
+  const idleA = pick('cafeidle', 'idle') || fuzzy('idle') || anims[0];
+  const walkA = pick('cafewalk', 'walk') || fuzzy('walk');
+  if (!walkA) fb.push('walk<-idle');
+  const defs = [];
+  const add = (key, anim, loop, side, extra) => { if (anim) defs.push({ key, anim, loop, side, ...extra }); };
+
+  add('idle', idleA, true, false);
+  add('alert', pick('formationidle'), true, false);
+  if (!pick('formationidle')) fb.push('alert<-idle');
+  add('react', pick('cafereaction'), false, false);
+  const pickupA = pick('formationpickup') || pick('formationidle') || pick('cafereaction');
+  if (!pick('formationpickup')) fb.push('pickup<-' + (pickupA ? pickupA.name : 'idle'));
+  add('pickup', pickupA, false, false);
+  add('walk', walkA || idleA, true, true);
+  if (pick('moveing')) add('run', pick('moveing'), true, true);
+  else fb.push('run<-walk');
+  if (stance) {
+    add('atk_start', atk[stance].start, false, true, { weapon: true });
+    add('atk_ing', atk[stance].ing, false, true, { weapon: true });
+    add('atk_end', atk[stance].end, false, true, { weapon: true });
+  } else {
+    const fa = pick('exs', 'exscutin', 'exscutin01', 'tacticalstart', 'cafereaction') || fuzzy('exs');
+    if (fa) { add('atk_ing', fa, false, true, { weapon: true, cap: 2.5 }); fb.push('attack<-' + fa.name); }
+  }
+  const reloadA = pick('normalreload') || (stance && pick(stance + 'reload'));
+  if (reloadA) add('reload', reloadA, false, true, { weapon: true });
+  else fb.push('reload<-none');
+
+  /* measure from idle pose */
+  showWeapons(false);
+  useClip(idleA, true); pose(0, 0);
+  let box = new THREE.Box3().setFromObject(model, true);
+  if (!isFinite(box.min.y) || box.max.y - box.min.y < 1e-4) box = new THREE.Box3().setFromObject(model);
+  const mh = box.max.y - box.min.y, yMin = box.min.y;
+  const sc = H / mh; // px per unit
+
+  const ortho = (cx, cy, w, h) => {
+    const c = new THREE.OrthographicCamera(-w / 2, w / 2, h / 2, -h / 2, 0.01, 1000);
+    c.position.set(cx, cy, 100); c.lookAt(cx, cy, 0); c.updateMatrixWorld(); return c;
+  };
+  const mainCam = ortho(0, yMin + feetRow / sc - cellH / (2 * sc), cellW / sc, cellH / sc);
+
+  const OUT = '#14121f';
+  const grab = (cam, w, h, ss, outline) => {
+    renderer.setSize(w * ss, h * ss, false);
+    renderer.render(scene, cam);
+    const c1 = mk(w, h), x1 = c1.getContext('2d');
+    x1.imageSmoothingEnabled = true; x1.imageSmoothingQuality = 'high';
+    x1.drawImage(renderer.domElement, 0, 0, w, h);
+    if (!outline) return c1;
+    const t = mk(w, h), xt = t.getContext('2d');
+    xt.drawImage(c1, 0, 0); xt.globalCompositeOperation = 'source-in'; xt.fillStyle = OUT; xt.fillRect(0, 0, w, h);
+    const o = mk(w, h), xo = o.getContext('2d');
+    for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]) xo.drawImage(t, dx, dy);
+    xo.drawImage(c1, 0, 0);
+    return o;
+  };
+
+  const meta = [];
+  const addPreview = (canvas, label) => {
+    const d = document.createElement('div'); d.className = 'text-xs text-slate-400 text-center';
+    canvas.style.background = '#334155'; canvas.className = 'rounded'; d.appendChild(canvas);
+    d.appendChild(document.createTextNode(label)); $('previews').appendChild(d);
+  };
+  const animDir = root + 'Assets/Anim/' + s.key + '/';
+  const bakeFrames = async (key, loopFlag, side, n, durSave, frameFn) => {
+    const cols = Math.min(n, COLS), rows = Math.ceil(n / cols);
+    const sheet = mk(cols * cellW, rows * cellH), sx = sheet.getContext('2d');
+    for (let i = 0; i < n; i++) {
+      frameFn(i);
+      const cell = grab(mainCam, cellW, cellH, SS, true);
+      sx.drawImage(cell, (i % cols) * cellW, Math.floor(i / cols) * cellH);
+      if (key === 'idle' && i === 0) { const pc = mk(cellW, cellH); pc.getContext('2d').drawImage(cell, 0, 0); addPreview(pc, s.key); }
+    }
+    files.push({ name: animDir + key + '.png', data: await toPNG(sheet) });
+    meta.push({ key, n, cols, dur: durSave, loop: loopFlag, side });
+  };
+
+  for (const d of defs) {
+    await tick();
+    useClip(d.anim, d.loop);
+    showWeapons(!!d.weapon);
+    const dur = d.cap ? Math.min(d.anim.duration, d.cap) : d.anim.duration;
+    const n = dur < 0.05 ? 1 : Math.max(2, Math.min(MAXF, Math.ceil(dur * FPS)));
+    await bakeFrames(d.key, d.loop, d.side, n, dur < 0.05 ? 0.05 : dur, i => {
+      const t = n === 1 ? 0 : (d.loop ? dur * i / n : dur * i / (n - 1));
+      pose(t, d.side ? SIDE : 0);
+    });
+  }
+  // turn strip: idle pose, yaw front -> 3/4
+  await tick();
+  showWeapons(false);
+  useClip(idleA, true);
+  await bakeFrames('turn', false, false, 6, 0.24, i => pose(0, SIDE * i / 5));
+
+  /* head icon (+ big version for the mod icon) */
+  showWeapons(false);
+  useClip(idleA, true); pose(0, 0);
+  let hx = 0, hy = yMin + mh * 0.9;
+  if (head) { head.getWorldPosition(v3); hx = v3.x; hy = v3.y + mh * 0.015; }
+  const headSmall = grab(ortho(hx, hy, mh * 0.25, mh * 0.25), 28, 28, 8, true);
+  files.push({ name: root + 'Assets/Heads/' + s.key + '.png', data: await toPNG(headSmall) });
+  const bigHead = grab(ortho(hx, hy, mh * 0.3, mh * 0.3), 80, 80, 6, false);
+
+  const order = ['idle', 'alert', 'react', 'pickup', 'walk', 'run', 'atk_start', 'atk_ing', 'atk_end', 'reload', 'turn'];
+  meta.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+
+  disposeModel(model);
+  if (mixer) { mixer.stopAllAction(); mixer.uncacheRoot(model); }
+  log('  ' + meta.length + ' clips' + (fb.length ? '  | fallbacks: ' + fb.join(', ') : ''));
+  return { s, meta, fb, bigHead };
+}
+
+/* ------------------------------------------------------------------ build */
+async function build() {
+  const btn = $('go');
+  btn.disabled = true; $('log').textContent = ''; $('previews').innerHTML = ''; $('again').classList.add('hidden');
+  let renderer = null;
+  try {
+    const H = +$('hgt').value, FPS = +$('fps').value, FLIP = $('flip').checked;
+    const SIDE = (+$('yaw').value || 65) * Math.PI / 180;
+    const SS = 3, MAXF = 48, COLS = 8;
+    const cellW = even(H * 1.7), cellH = even(H * 1.35), feetRow = Math.round(H * 1.2);
+    const chosen = STUDENTS.filter((s, i) => document.querySelector('#roster input[data-i="' + i + '"]').checked);
+    if (!chosen.length) throw new Error('No students ticked.');
+    const locals = localFiles();
+
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(1); renderer.setClearColor(0x000000, 0);
+    const ctx = { renderer, H, FPS, FLIP, SIDE, SS, MAXF, COLS, cellW, cellH, feetRow };
+
+    const files = [], done = [], failed = [];
+    for (let i = 0; i < chosen.length; i++) {
+      const s = chosen[i];
+      log('[' + (i + 1) + '/' + chosen.length + '] ' + s.label + ' -> ' + s.key + '  (' + s.file + '.glb)'); await tick();
+      try { done.push(await bakeStudent(s, ctx, files, locals)); }
+      catch (e) { console.error(e); log('  SKIPPED: ' + (e && e.message || e)); failed.push(s.key); }
+    }
+    if (!done.length) throw new Error('Nothing was baked.');
+
+    /* mod icon from the first student's head */
+    const icon = mk(80, 80), ix = icon.getContext('2d');
+    const g = ix.createLinearGradient(0, 0, 80, 80); g.addColorStop(0, '#1e3a5f'); g.addColorStop(1, '#5b8bc9');
+    ix.fillStyle = g; ix.fillRect(0, 0, 80, 80); ix.drawImage(done[0].bigHead, 0, 0);
+    files.push({ name: MOD + '/icon.png', data: await toPNG(icon) });
+
+    const root = MOD + '/';
+    files.push({ name: root + MOD + '.csproj', data: txt(csproj()) });
+    files.push({ name: root + 'build.txt', data: txt(buildTxt()) });
+    files.push({ name: root + 'description.txt', data: txt(descTxt()) });
+    files.push({ name: root + MOD + '.cs', data: txt(modCs()) });
+    files.push({ name: root + 'Common/StudentAssets.cs', data: txt(assetsCs()) });
+    files.push({ name: root + 'Common/StudentNPC.cs', data: txt(npcCs()) });
+    files.push({ name: root + 'Common/StudentData.cs', data: txt(studentDataCs(done, cellW, cellH, feetRow)) });
+    files.push({ name: root + 'PORTING_NOTES.md', data: txt(notesMd(done)) });
+
+    log('Zipping ' + files.length + ' files ...'); await tick();
+    lastZip = makeZip(files);
+    log('Done: ' + done.length + ' students, ' + (lastZip.size / 1048576).toFixed(1) + ' MB.' +
+      (failed.length ? ' Skipped: ' + failed.join(', ') + '.' : '') + ' If they face the wrong way, tick the flip box and rebuild.');
+    save();
+  } catch (e) {
+    console.error(e); log('ERROR: ' + (e && e.message || e));
+  } finally { if (renderer) renderer.dispose(); btn.disabled = false; }
+}
+function save() {
+  if (!lastZip) return;
+  const url = URL.createObjectURL(lastZip);
+  const a = document.createElement('a'); a.href = url; a.download = MOD + '.zip';
+  document.body.appendChild(a); a.click(); a.remove();
+  const again = $('again'); again.href = url; again.download = MOD + '.zip'; again.classList.remove('hidden');
+}
+$('go').addEventListener('click', build);
+</script>
+</body>
+</html>
