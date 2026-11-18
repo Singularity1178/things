@@ -1,12 +1,17 @@
 # Merge notes — Copy (2) renderer/loader work into `irojhasda-main`
 
-Everything below was checked against the two working trees:
+Everything below was checked against the two working trees, then frozen into
+this package:
 
-- base: `C:\Users\ADMIN\Downloads\irojhasda-main`
-- source: `C:\Users\ADMIN\Downloads\newest irojhasda-main - Copy (2)`
+- base: `irojhasda` remote `main` at
+  `0b0ca5239bb84f942cee28fb38c668c315dc510f`, snapshotted in `base/`;
+- source: `newest irojhasda-main - Copy (2)`, snapshotted in `copy2/`.
 
-Line numbers refer to the snapshots in this folder (`base/`, `copy2/`), which are
-byte-identical to those two trees at handoff time.
+The source checkout was never published as a repo; `copy2/` is the only copy of
+it. Treat it as reference material, not as a runnable tree. Line numbers refer to
+the snapshots in this folder, which are byte-identical to the two trees at
+handoff time. Clone `https://github.com/Singularity1178/irojhasda.git` and edit
+that working copy.
 
 ---
 
@@ -453,10 +458,14 @@ per-frame wins.
 
 ## 9. Verification
 
-Run from the base repo root with its venv:
+Run from the cloned `irojhasda` root with its venv (the repo ships no
+`requirements.txt`; the verified set is PySide6 6.11.2, moderngl 5.12.0,
+numpy 2.5.3, pymunk 7.3.0 on Python 3.13):
 
 ```powershell
-cd C:\Users\ADMIN\Downloads\irojhasda-main
+cd irojhasda
+python -m venv venv
+.\venv\Scripts\pip install PySide6==6.11.2 moderngl==5.12.0 numpy==2.5.3 pymunk==7.3.0
 
 # 1. loader/residency regressions
 .\venv\Scripts\python.exe -m unittest -v test_model_loading
@@ -468,6 +477,8 @@ cd C:\Users\ADMIN\Downloads\irojhasda-main
 .\venv\Scripts\python.exe tools\benchmark_startup.py --root . --models 20 --runs 3
 .\venv\Scripts\python.exe tools\benchmark_startup.py --root . --models 200 --runs 3
 ```
+
+On Linux, use `venv/bin/python` and prefix the live test with `xvfb-run -a`.
 
 Then add a small bake-equality test (do **not** drop in
 `tests/test_lazy_models.copy2.py` unchanged — it asserts Copy (2)'s lazy
@@ -496,10 +507,12 @@ draws one model N times and measures `draw()` wall time.
 
 ## 10. Commit hygiene
 
-The base tree is dirty (runtime settings, caches). Follow its `AGENTS.md`:
+A fresh clone is clean. Follow the repo's `AGENTS.md`:
 
 - stage only the files you actually changed (`bapet/renderer.py`,
   `bapet/gltf.py`, `bapet/model.py`, `bapet/pet_render.py`, `bapet/pet.py`,
   optionally `bapet/app_models.py`, `PERFORMANCE.md`, and the new test);
-- do not commit `multi_single_screen_pet_ba_settings.json` or `__pycache__`;
-- push after committing and confirm the branch is not ahead.
+- do not commit `multi_single_screen_pet_ba_settings.json`,
+  `battle_arena_settings.json`, `campaign_save.json`, or `__pycache__`;
+- push after committing and confirm the branch is not ahead. If the clone has no
+  push credentials, keep the commit and report that it is local-only.

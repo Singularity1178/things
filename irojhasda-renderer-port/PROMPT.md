@@ -1,25 +1,83 @@
 # Prompt — port the renderer/animation wins from Copy (2) into `irojhasda-main`
 
 You are working on the **irojhasda** Python desktop-pet project (PySide6 + moderngl,
-Windows, Python venv in the checkout). Two checkouts exist:
+Windows, Python 3.13 venv). You do not have the author's local files. **Everything
+you need is in two public GitHub repositories — clone them first.**
 
-- **Target / base:** `irojhasda-main` — the one to change.
-- **Source:** `newest irojhasda-main - Copy (2)` — an experimental optimisation
-  branch. Its relevant files are also snapshotted in the GitHub folder below.
+---
 
-Reference package:
-**https://github.com/Singularity1178/things/tree/master/irojhasda-renderer-port**
+## Step 0 — clone the two repositories
 
-Read, in this order:
+```bash
+git clone https://github.com/Singularity1178/irojhasda.git
+git clone https://github.com/Singularity1178/things.git
+```
+
+- `irojhasda/` — the **target / base** repo. Branch `main`. All code changes happen here.
+- `things/irojhasda-renderer-port/` — the **handoff package**. Read-only reference:
+  snapshots of the two versions, patches, tests, benchmark, performance notes.
+
+There is **no third repository** for the source version. The checkout called
+`newest irojhasda-main - Copy (2)` was an experimental working tree that was never
+published; only its relevant files were snapshotted into
+`things/irojhasda-renderer-port/copy2/`. Do not go looking for it elsewhere.
+
+The base snapshot `things/irojhasda-renderer-port/base/` was taken from
+`irojhasda@0b0ca5239bb84f942cee28fb38c668c315dc510f` (remote `main`). After
+cloning, confirm you are on that commit:
+
+```bash
+cd irojhasda
+git rev-parse HEAD
+git status --short
+```
+
+If `HEAD` is different, or the tree is unexpectedly dirty, **stop and report it**
+before applying anything. The patch line numbers and the analysed behaviour
+assume that commit.
+
+### Environment
+
+The repo has no `requirements.txt` and no committed venv. The verified
+environment is Python 3.13 with:
+
+```bash
+python -m venv venv
+venv\Scripts\pip install PySide6==6.11.2 moderngl==5.12.0 numpy==2.5.3 pymunk==7.3.0
+# Linux/macOS: venv/bin/pip install ...
+```
+
+`read_into()` (used below) needs moderngl ≥ 5.6; 5.12.0 has it.
+
+All `model/*.glb` files are tracked, so a clone is enough to run the live tests.
+No downloaded assets, voice data, or settings are required.
+
+---
+
+## Step 1 — read the package, in this order
+
+From `things/irojhasda-renderer-port/`:
 
 1. `README.md` — what is in the package and the measured verdict.
 2. `MERGE_NOTES.md` — file-by-file plan, exact traps, do-not-port list.
 3. `patches/renderer.patch`, `patches/gltf.patch`, `patches/model.patch`,
-   `patches/pet_render.patch` — mechanical diffs (`git apply -p1` from a repo root).
-4. `base/bapet/*.py` and `copy2/bapet/*.py` — the two snapshots being compared.
-5. `docs/PERFORMANCE-main.md` and `docs/PERFORMANCE-copy2.md` — each side's claims.
+   `patches/pet_render.patch` — mechanical diffs, `git apply -p1` from the
+   `irojhasda/` root. They were verified to apply cleanly to `base/` and to
+   reproduce `copy2/` exactly.
+4. `base/bapet/*.py` — frozen snapshot of the files you are changing.
+5. `copy2/bapet/*.py` — the source versions of those same files.
+6. `docs/PERFORMANCE-main.md`, `docs/PERFORMANCE-copy2.md` — each side's claims.
 
-If you cannot find the two checkouts, locate them or ask; do not invent files.
+Useful check before editing:
+
+```bash
+cd irojhasda
+git apply --check -p1 ../things/irojhasda-renderer-port/patches/renderer.patch
+```
+
+`tests/test_lazy_models.copy2.py` is **reference only**: it imports Copy (2)'s
+lazy `Character`, which the base does not have. Do not try to run it as-is. The
+useful part is `reference_bake()`.
 
 ---
 
@@ -137,48 +195,56 @@ actually required for the port to work, stop and explain before doing it.
 - Do not mutate `p.shade` / `p.cutoff` / `p.basecol` at runtime after caching them.
 - Keep changes consistent with the surrounding code: same naming, same terse
   comment style, no new dependencies.
-- The working tree is dirty. Stage only the files the change touched. Do not
-  commit `multi_single_screen_pet_ba_settings.json` or `__pycache__`.
+- The working tree starts clean. Stage only the files the change touched. Do not
+  commit `multi_single_screen_pet_ba_settings.json`, `battle_arena_settings.json`,
+  `campaign_save.json`, or `__pycache__`.
 - Follow the repo's `AGENTS.md`: commit, then push, and confirm the branch is not
-  ahead.
+  ahead. If your clone has no push credentials, leave the commit in place and say
+  so explicitly rather than pretending it was pushed.
 
 ---
 
 ## Verification (must pass before you call it done)
 
-From the base repo root, with its venv:
+From the `irojhasda/` root, with its venv:
 
-```powershell
-.\venv\Scripts\python.exe -m unittest -v test_model_loading
-.\venv\Scripts\python.exe test_asset_runtime.py --live
-.\venv\Scripts\python.exe tools\benchmark_startup.py --root . --models 20 --runs 3
+```bash
+venv\Scripts\python.exe -m unittest -v test_model_loading
+venv\Scripts\python.exe test_asset_runtime.py --live
+venv\Scripts\python.exe tools\benchmark_startup.py --root . --models 20 --runs 3
 ```
+
+Linux/headless: prefix the live test with `xvfb-run -a`, and use
+`venv/bin/python`.
 
 Then:
 
 - Add a bake-equality test: for one model and the first 6 animations, compare
   `_bake_clip` output to a channel-by-channel `sample_channel` reference with
-  `np.array_equal`, and assert `c.T.dtype == np.float32`. (You can adapt
-  `reference_bake()` from `tests/test_lazy_models.copy2.py`, but that file as a
-  whole tests Copy (2)'s lazy `Character`, which the base does not have.)
+  `np.array_equal`, and assert `c.T.dtype == np.float32`. Adapt
+  `reference_bake()` from `things/irojhasda-renderer-port/tests/test_lazy_models.copy2.py`;
+  do not import that file's lazy-`Character` parts.
 - Manual smoke test in the real app: deploy two students, walk/poke/pat/ragdoll,
   resize with the wheel, open Student Select and scroll, enter and leave a
   battle. Look for: vertical flips, alpha/mask offset, black frames, stale
   uniforms, crashes.
 - `benchmark_startup.py` uses a headless moderngl stand-in, so it proves only
   that startup did not regress. The renderer gains need a real context / the app.
+- If the machine has no GPU / no display, say which checks you could not run
+  rather than claiming them.
 
 ---
 
 ## Deliverable
 
-A working port in `irojhasda-main`, with:
+A working port in your `irojhasda` clone, with:
 
 1. the code changes above;
 2. a short note in `PERFORMANCE.md` (update the per-frame section; do not paste
    Copy (2)'s doc — it describes features the base does not have);
-3. the verification results;
-4. a commit (pushed) that lists what was ported and what was deliberately left out.
+3. the verification results, including what you could not run;
+4. a commit that lists what was ported and what was deliberately left out, pushed
+   if you have credentials.
 
 ---
 

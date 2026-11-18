@@ -1,12 +1,33 @@
 # irojhasda renderer port — handoff package
 
 This folder exists so a second agent can port the good parts of the
-**`newest irojhasda-main - Copy (2)`** checkout into
+**`newest irojhasda-main - Copy (2)`** working tree into
 **`irojhasda-main`**, without having to redo the comparison.
 
 Start with **`PROMPT.md`** — that is the task prompt. Read
 **`MERGE_NOTES.md`** before touching code; it contains the file-by-file plan,
 the exact caveats, and the list of things that must *not* be ported.
+
+## If you only have GitHub access
+
+Clone both repos and work from the clone — this package assumes no access to the
+original machine's disk:
+
+```bash
+git clone https://github.com/Singularity1178/irojhasda.git
+git clone https://github.com/Singularity1178/things.git
+cd irojhasda
+```
+
+- `irojhasda/` (branch `main`) is the target; all edits happen there.
+- `things/irojhasda-renderer-port/` is this read-only package.
+- There is **no source repo** for "Copy (2)"; only its relevant files are in
+  `copy2/`. Use them as reference, not as a runnable checkout.
+
+Provenance: `base/` was snapshotted from
+`irojhasda@0b0ca5239bb84f942cee28fb38c668c315dc510f` (remote `main`). The
+patches apply cleanly to that commit and reproduce `copy2/` exactly. If your
+clone's `HEAD` differs, report it before applying anything.
 
 ## Contents
 
@@ -24,8 +45,8 @@ the exact caveats, and the list of things that must *not* be ported.
 | `docs/PERFORMANCE-main.md` | The target repo's performance notes. |
 | `docs/PERFORMANCE-copy2.md` | Copy (2)'s performance notes (source of the per-frame claims). |
 
-Snapshots are read-only reference material. Do not edit them; edit the real
-checkout `C:\Users\ADMIN\Downloads\irojhasda-main` (or wherever it lives for you).
+Snapshots are read-only reference material. Do not edit them; edit your cloned
+`irojhasda/` working copy.
 
 ## The one-paragraph verdict
 
