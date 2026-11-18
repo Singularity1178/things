@@ -1,0 +1,25 @@
+diff --git a/bapet/pet_render.py b/bapet/pet_render.py
+--- a/bapet/pet_render.py
++++ b/bapet/pet_render.py
+@@ -219,12 +219,18 @@ class PetRender:
+             az, el = math.radians(cfg["light_az"]), math.radians(cfg["light_el"])
+             tgt = np.array([math.cos(el) * math.sin(az), math.sin(el), math.cos(el) * math.cos(az)])
+         self.light += (tgt - self.light) * min(1.0, 1.0 - math.exp(-self.dt * 12))     # B7: frame-rate independent
+-        raw = R.draw(world, M, self.light, cfg)
++        # The frame is drawn already the right way up (flip_y) and read straight into her own
++        # buffer, which the QImage and the alpha mask then simply look at. It used to be a new
++        # frame-sized bytes object every tick plus a second full copy to turn it over.
+         w, h = R.w, R.h
++        raw = self._fbuf
++        if raw is None or len(raw) != w * h * 4:
++            raw = self._fbuf = bytearray(w * h * 4)
++        R.draw(world, M, self.light, cfg, flip_y=True, into=raw)
+         self.raw = raw
+-        self.img = QtGui.QImage(raw, w, h, w * 4, QtGui.QImage.Format.Format_RGBA8888_Premultiplied).mirrored(False, True)
++        self.img = QtGui.QImage(raw, w, h, w * 4, QtGui.QImage.Format.Format_RGBA8888_Premultiplied)
+         self.img.setDevicePixelRatio(self.dpr)              # B8: no resample on fractional-DPI screens
+-        self.alpha = np.frombuffer(raw, np.uint8).reshape(h, w, 4)[::-1, :, 3]
++        self.alpha = np.frombuffer(raw, np.uint8).reshape(h, w, 4)[:, :, 3]
+         if self.model.head is not None:
+             hxp, hyp = R.project(world[self.model.head][:3, 3], M)
+             # stand_h(), not H: the nudge that lifts her head marker off the
